@@ -284,7 +284,7 @@
   /* ---------- แท็บหน้าหลัก ---------- */
   const shortcuts = [
     ['profile', 'user', 'โปรไฟล์'], ['friends', 'userPlus', 'เพื่อน'], ['groups', 'users', 'กลุ่ม'],
-    ['services', 'apps', 'บริการ'], ['officials', 'verified', 'บัญชีทางการ']
+    ['online', 'globe', 'ออนไลน์'], ['services', 'apps', 'บริการ'], ['officials', 'verified', 'บัญชีทางการ']
   ];
   const suggested = () => Object.values(M.st.users).filter(u => !M.st.following.includes(u.id) && !M.st.blocked.includes(u.id) && u.id !== 'stranger');
   const suggestCard = () => {

@@ -1,7 +1,7 @@
 /* Service worker: ทำให้ติดตั้งเป็นแอปและเปิดแบบออฟไลน์ได้
    - ไฟล์ของแอป: ลองโหลดจากเครือข่ายก่อน (ได้เวอร์ชันล่าสุดเสมอ) ถ้าออฟไลน์ใช้สำเนาในแคช
    - ฟอนต์ Google และโมเดลตัวกรอง 18+ จาก jsDelivr: ใช้แคชก่อน (ไฟล์ระบุเวอร์ชัน ไม่เปลี่ยน) */
-const VERSION = 'mali-v2';
+const VERSION = 'mali-v3';
 const SHELL = [
     './',
     './css/app.css',
@@ -27,6 +27,7 @@ const SHELL = [
     './js/screens/explore.js',
     './js/screens/home.js',
     './js/screens/hub.js',
+    './js/screens/online.js',
     './js/screens/p2p.js',
     './js/screens/profile.js',
     './js/screens/reels.js',
@@ -47,6 +48,7 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  if (url.origin === location.origin && /^\/(api|media)\//.test(url.pathname)) return; // ข้อมูลสดจากเซิร์ฟเวอร์ ไม่แคช
   if (url.origin === location.origin) {
     e.respondWith(fetch(req, { cache: 'no-cache' }).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); }
