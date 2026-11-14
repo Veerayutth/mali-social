@@ -1,0 +1,4 @@
+<resources>
+    <!-- ยืนยันว่าแอปนี้เป็นเจ้าของเว็บไซต์ (คู่กับ /.well-known/assetlinks.json บนเว็บ) -->
+    <string name="asset_statements" translatable="false">[{\"relation\": [\"delegate_permission/common.handle_all_urls\"], \"target\": {\"namespace\": \"web\", \"site\": \"https://mali-social-6be0.netlify.app\"}}]</string>
+</resources>

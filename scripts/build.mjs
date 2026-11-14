@@ -4,5 +4,5 @@ const out = 'dist';
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(out);
 for (const f of ['index.html', 'sw.js', 'manifest.webmanifest']) fs.copyFileSync(f, `${out}/${f}`);
-for (const d of ['css', 'js', 'icons']) fs.cpSync(d, `${out}/${d}`, { recursive: true });
+for (const d of ['css', 'js', 'icons', '.well-known']) fs.cpSync(d, `${out}/${d}`, { recursive: true });
 console.log('built dist/');
