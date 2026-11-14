@@ -150,6 +150,7 @@
             <button class="row" data-act="onUser" data-h="${esc(C.me.handle)}"><span class="row-ic">${I('grid', 22)}</span><span class="row-tx"><span>โปรไฟล์และโพสต์ของฉัน</span></span></button>
             <button class="row" data-act="onFollows" data-h="${esc(C.me.handle)}" data-k="followers"><span class="row-ic">${I('users', 22)}</span><span class="row-tx"><span>ผู้ติดตามและการติดตาม</span></span></button>
             <button class="row" data-act="onAccounts"><span class="row-ic">${I('userPlus', 22)}</span><span class="row-tx"><span>สลับหรือเพิ่มบัญชี</span><small>เข้าสู่ระบบไว้ได้สูงสุด 5 บัญชีในเครื่องนี้</small></span></button>
+            <button class="row" data-act="openChangeHandle" data-online="1"><span class="row-ic">${I('type', 22)}</span><span class="row-tx"><span>เปลี่ยนชื่อผู้ใช้</span><small translate="no">@${esc(C.me.handle)}</small></span></button>
             <button class="row" data-act="onEdit" data-k="name"><span class="row-ic">${I('edit', 22)}</span><span class="row-tx"><span>แก้ไขชื่อ</span></span></button>
             <button class="row" data-act="onEdit" data-k="bio"><span class="row-ic">${I('type', 22)}</span><span class="row-tx"><span>แก้ไข Bio</span></span></button>
             <button class="row" data-act="onLogoutAll"><span class="row-ic">${I('device', 22)}</span><span class="row-tx"><span>ออกจากระบบทุกอุปกรณ์</span></span></button>

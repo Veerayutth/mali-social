@@ -73,7 +73,7 @@
   };
 
   const highlights = (mine) => `<div class="hl hscroll">${mine ? `<button class="hl-it" data-act="newHighlight"><span class="hl-c add">${I('plus')}</span><span>ใหม่</span></button>` : ''}
-    ${(mine ? M.st.highlights : []).map(h => `<button class="hl-it" data-act="openHighlight" data-id="${h.id}"><span class="hl-c">${M.media(h.items[0])}</span><span>${esc(h.title)}</span></button>`).join('')}</div>`;
+    ${(mine ? M.st.highlights.filter(h => !h.archived) : []).map(h => `<button class="hl-it" data-act="openHighlight" data-id="${h.id}"><span class="hl-c">${M.media(h.items[0])}</span><span>${esc(h.title)}</span></button>`).join('')}</div>`;
 
   const tabsBar = (cur, mine) => `<div class="pf-tabs" role="tablist">${[['grid', 'grid', 'โพสต์'], ['reels', 'reels', 'Reels'], ['reposts', 'repost', 'รีโพสต์'], ['tagged', 'tag', 'ที่ถูกแท็ก']].map(([k, ic, l]) =>
     `<button role="tab" class="${cur === k ? 'on' : ''}" data-act="pfTab" data-k="${k}" aria-label="${l}" aria-selected="${cur === k}">${I(ic, 22)}</button>`).join('')}</div>`;
@@ -256,7 +256,7 @@
         <div class="center ep-av">${M.avatar(me, 86)}<button type="button" class="link acc" data-act="changeAvatar">เปลี่ยนรูปโปรไฟล์</button>${me.photo ? '<button type="button" class="link muted" data-act="removeAvatar">ลบรูป</button>' : ''}</div>
         <div><span class="lbl">สีวงสตอรี่ของคุณ</span><div data-ringbox>${M.ringPicker(me.ringColor || '#c4411a')}</div></div>
         <label>ชื่อ<input class="field" name="name" value="${esc(me.name)}" maxlength="40"></label>
-        <label>ชื่อผู้ใช้<input class="field" name="handle" value="${esc(me.handle)}" maxlength="30" pattern="[a-z0-9._]{3,30}"></label>
+        <button type="button" class="row ep-row" data-act="openChangeHandle"><span class="row-tx"><small>ชื่อผู้ใช้</small><span translate="no">${esc(me.handle)}</span></span>${I('chev', 18)}</button>
         <label>สรรพนาม<input class="field" name="pronoun" value="${esc(me.pronoun || '')}" maxlength="20" placeholder="ไม่บังคับ"></label>
         <label>Bio<textarea class="field" name="bio" rows="3" maxlength="150">${esc(me.bio)}</textarea></label>
         <label>ลิงก์<input class="field" name="link" value="${esc(me.link || '')}" placeholder="https://"></label>
@@ -267,11 +267,9 @@
   M.Pages.editProfile.mount = el => M.wireRingPicker(el.querySelector('[data-ringbox]'), c => { M.st.me.ringColor = c; M.applyAppearance(); M.save(); el.querySelector('[data-ringbox]').innerHTML = M.ringPicker(c); M.Pages.editProfile.mount(el); });
   A.saveProfile = () => {
     const f = M.$('[data-pf]'), me = M.st.me;
-    const handle = f.handle.value.trim().toLowerCase();
-    if (!/^[a-z0-9._]{3,30}$/.test(handle)) return M.toast('ชื่อผู้ใช้ใช้ได้เฉพาะ a-z 0-9 . _ ยาว 3–30 ตัว');
     const link = f.link.value.trim();
     if (link) { const s = M.sec.scanUrl(link, false); if (s.level === 'danger') return M.toast('บันทึกลิงก์ไม่ได้: ' + s.reasons[0]); }
-    Object.assign(me, { name: f.name.value.trim() || me.name, handle, pronoun: f.pronoun.value.trim(), bio: f.bio.value.trim(), link });
+    Object.assign(me, { name: f.name.value.trim() || me.name, pronoun: f.pronoun.value.trim(), bio: f.bio.value.trim(), link });
     M.toast('บันทึกโปรไฟล์แล้ว'); M.back(); M.refresh();
   };
   A.changeAvatar = async () => {

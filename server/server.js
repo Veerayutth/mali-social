@@ -53,6 +53,9 @@ db.exec(`
     created INTEGER NOT NULL, read_at INTEGER);
   CREATE INDEX IF NOT EXISTS messages_pair ON messages(pair, created);
   CREATE INDEX IF NOT EXISTS messages_to ON messages(to_id, read_at);
+  CREATE TABLE IF NOT EXISTS handle_changes (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, old TEXT NOT NULL COLLATE NOCASE, new TEXT NOT NULL COLLATE NOCASE, ts INTEGER NOT NULL);
+  CREATE INDEX IF NOT EXISTS handle_changes_old ON handle_changes(old, ts);
 `);
 const q = sql => db.prepare(sql);
 const now = () => Date.now();
@@ -165,6 +168,10 @@ function currentUser(req) {
 const needUser = req => currentUser(req) || fail(401, 'กรุณาเข้าสู่ระบบ');
 
 /* ---------------- รูปแบบข้อมูลที่ส่งกลับ ---------------- */
+/* ชื่อผู้ใช้: ใช้ได้เฉพาะ a-z 0-9 _ . / ชื่อเดิมถูกกันไว้ให้เจ้าของ 14 วันหลังเปลี่ยน / เปลี่ยนได้ 5 ครั้งใน 30 นาที */
+const HANDLE_RESERVE_MS = 14 * 864e5, HANDLE_MAX = 5, HANDLE_WINDOW_MS = 30 * 60e3;
+const handleOk = h => /^[a-z0-9_.]{3,30}$/.test(h) && !/^\.|\.$|\.\./.test(h);
+const handleReservedFor = h => q('SELECT user_id FROM handle_changes WHERE old = ? AND ts > ? ORDER BY ts DESC LIMIT 1').get(h, now() - HANDLE_RESERVE_MS)?.user_id || null;
 const pubUser = u => u && ({ id: u.id, handle: u.handle, name: u.name, bio: u.bio, avatar: u.avatar, hue: u.hue });
 function postOut(p, meId) {
   const u = q('SELECT * FROM users WHERE id = ?').get(p.user_id);
@@ -225,7 +232,7 @@ route('POST', '/api/auth/signup', async (req, res) => {
   if (!/^[a-z0-9_.]{3,30}$/.test(handle) || /^\.|\.$|\.\./.test(handle)) fail(400, 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z 0-9 _ . ยาว 3–30 ตัว');
   if (pw.length < 8 || pw.length > 128) fail(400, 'รหัสผ่านต้องยาว 8–128 ตัวอักษร');
   if (pw.toLowerCase().includes(handle)) fail(400, 'รหัสผ่านต้องไม่มีชื่อผู้ใช้อยู่ด้วย');
-  if (q('SELECT 1 FROM users WHERE handle = ?').get(handle)) fail(409, 'ชื่อผู้ใช้นี้มีคนใช้แล้ว');
+  if (q('SELECT 1 FROM users WHERE handle = ?').get(handle) || handleReservedFor(handle)) fail(409, 'ชื่อผู้ใช้นี้มีคนใช้แล้ว');
   const id = newId('u_');
   q('INSERT INTO users (id, handle, name, pw, created, hue) VALUES (?,?,?,?,?,?)').run(id, handle, name, await hashPw(pw), now(), crypto.randomInt(0, 360));
   createSession(res, id, req);
@@ -289,6 +296,31 @@ route('PATCH', '/api/me', async req => {
   if (b.avatar !== undefined) { if (b.avatar === null) avatar = null; else if (mediaUrlOk(b.avatar) && /\.(jpg|png|webp|gif)$/.test(b.avatar)) avatar = b.avatar; else fail(400, 'รูปโปรไฟล์ไม่ถูกต้อง'); }
   q('UPDATE users SET name = ?, bio = ?, avatar = ? WHERE id = ?').run(name, bio, avatar, u.id);
   return { user: pubUser(q('SELECT * FROM users WHERE id = ?').get(u.id)) };
+});
+
+route('GET', '/api/me/handle', req => {
+  const me = needUser(req);
+  const prev = q('SELECT old, ts FROM handle_changes WHERE user_id = ? AND ts > ? ORDER BY ts DESC LIMIT 1').get(me.id, now() - HANDLE_RESERVE_MS);
+  const recent = q('SELECT COUNT(*) n FROM handle_changes WHERE user_id = ? AND ts > ?').get(me.id, now() - HANDLE_WINDOW_MS).n;
+  return { handle: me.handle, previous: prev && !q('SELECT 1 FROM users WHERE handle = ? AND id != ?').get(prev.old, me.id) ? { handle: prev.old, until: prev.ts + HANDLE_RESERVE_MS } : null, left: Math.max(0, HANDLE_MAX - recent) };
+});
+route('GET', '/api/handle-available', (req, res, p, url) => {
+  const me = needUser(req), h = String(url.searchParams.get('h') || '').toLowerCase();
+  if (!handleOk(h)) return { ok: false, reason: 'format' };
+  const owner = q('SELECT id FROM users WHERE handle = ?').get(h), rsv = handleReservedFor(h);
+  return { ok: (!owner || owner.id === me.id) && (!rsv || rsv === me.id) };
+});
+route('POST', '/api/me/handle', async req => {
+  const me = needUser(req);
+  const h = str((await readJson(req)).handle || '', 30, 'ชื่อผู้ใช้').toLowerCase();
+  if (!handleOk(h)) fail(400, 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z 0-9 _ . ยาว 3–30 ตัว');
+  if (h === me.handle.toLowerCase()) return { user: pubUser(me) };
+  if (q('SELECT COUNT(*) n FROM handle_changes WHERE user_id = ? AND ts > ?').get(me.id, now() - HANDLE_WINDOW_MS).n >= HANDLE_MAX) fail(429, 'เปลี่ยนชื่อผู้ใช้ได้สูงสุด 5 ครั้งใน 30 นาที ลองใหม่ภายหลัง');
+  const owner = q('SELECT id FROM users WHERE handle = ?').get(h), rsv = handleReservedFor(h);
+  if ((owner && owner.id !== me.id) || (rsv && rsv !== me.id)) fail(409, 'ชื่อผู้ใช้นี้มีคนใช้แล้ว');
+  q('UPDATE users SET handle = ? WHERE id = ?').run(h, me.id);
+  q('INSERT INTO handle_changes VALUES (?,?,?,?)').run(me.id, me.handle, h, now());
+  return { user: pubUser(q('SELECT * FROM users WHERE id = ?').get(me.id)) };
 });
 
 route('GET', '/api/users', (req, res, p, url) => {

@@ -18,6 +18,8 @@
     return { users, posts, reels, tags, places };
   };
 
+  // ยอดชมของวิดีโอ (ข้อมูลจำลองที่คงที่ต่อคลิป คำนวณจากยอดถูกใจ)
+  const viewsTag = x => (!x.slides || x.slides[0]?.video) ? `<span class="tile-views">${I('play', 14)} ${M.num((x.views ?? Math.round((x.likes || 0) * 14 + M.hash(x.id) % 9000)))}</span>` : '';
   M.Pages.explore = {
     render(p) {
       const st = M.st, q = p.q || '', tab = p.tab || 'top';
@@ -27,7 +29,7 @@
         body = `${st.recent.length ? `<div class="sec-row pad"><h3 class="sec-t">ค้นหาล่าสุด</h3><button class="link" data-act="clearRecent">ล้าง</button></div><div class="chips pad">${st.recent.map(r => `<button class="chip" data-act="exploreQ" data-q="${esc(r)}">${I('clock', 14)} ${esc(r)}</button>`).join('')}</div>` : ''}
           <h3 class="sec-t pad">กำลังเป็นที่นิยม</h3>
           <div class="chips pad">${allTags().slice(0, 8).map(([t]) => `<button class="chip" data-act="exploreQ" data-q="${esc(t)}">${esc(t)}</button>`).join('')}</div>
-          <div class="grid3 mosaic">${pool.map((x, i) => `<div class="${i % 10 === 2 || i % 10 === 6 ? 'tall' : ''}">${M.gridTile(x)}</div>`).join('')}</div>`;
+          <div class="grid3 mosaic">${pool.map((x, i) => `<div class="${i % 10 === 2 || i % 10 === 6 ? 'tall' : ''}">${M.gridTile(x)}${viewsTag(x)}</div>`).join('')}</div>`;
       } else {
         const r = search(q);
         const tabs = [['top', 'ยอดนิยม'], ['users', `บัญชี ${r.users.length}`], ['tags', `แท็ก ${r.tags.length}`], ['places', `สถานที่ ${r.places.length}`]];
@@ -39,7 +41,8 @@
         if (tab === 'places') body += `<div class="rows">${r.places.map(pl => `<button class="row" data-act="exploreQ" data-q="${esc(pl)}"><span class="row-ic">${I('pin', 22)}</span><span class="row-tx"><span>${esc(pl)}</span></span></button>`).join('') || '<p class="empty">ไม่พบสถานที่</p>'}</div>`;
       }
       return `<header class="bar glass"><button class="ibtn" data-act="back" aria-label="ย้อนกลับ">${I('back')}</button>
-        <form class="searchf" data-exsearch>${I('search', 18)}<input class="field" name="q" value="${esc(q)}" placeholder="ค้นหา" autocomplete="off" aria-label="ค้นหา">${q ? `<button type="button" class="ibtn sm" data-act="exploreQ" data-q="" aria-label="ล้าง">${I('x', 16)}</button>` : ''}</form></header>
+        <form class="searchf" data-exsearch>${I('search', 18)}<input class="field" name="q" value="${esc(q)}" placeholder="ค้นหา" autocomplete="off" aria-label="ค้นหา">${q ? `<button type="button" class="ibtn sm" data-act="exploreQ" data-q="" aria-label="ล้าง">${I('x', 16)}</button>` : ''}</form>
+        <button class="ibtn" data-act="page" data-page="saved" data-params="{}" aria-label="รายการที่บันทึกไว้">${I('bookmark')}</button></header>
         <div class="scroll"><div class="col">${body}</div></div>`;
     },
     mount(el, p) {
@@ -70,7 +73,8 @@
       const st = M.st, ns = st.notifications.filter(n => !st.blocked.includes(n.userId));
       const reqs = ns.filter(n => n.type === 'follow_req' && !n.resolved);
       const rest = ns.filter(n => n.type !== 'follow_req' || n.resolved);
-      const today = rest.filter(n => Date.now() - n.ts < M.T.DAY), older = rest.filter(n => Date.now() - n.ts >= M.T.DAY);
+      const age = n => Date.now() - n.ts;
+      const today = rest.filter(n => age(n) < M.T.DAY), week = rest.filter(n => age(n) >= M.T.DAY && age(n) < 7 * M.T.DAY), older = rest.filter(n => age(n) >= 7 * M.T.DAY);
       const row = n => {
         if (n.type === 'security') return `<button class="row notif sec-n" data-act="page" data-page="sessions" data-params="{}"><span class="row-ic warn">${I('shieldCheck', 22)}</span><span class="row-tx"><span>${esc(n.text)}</span><small>${M.ago(n.ts)}</small></span></button>`;
         const u = M.user(n.userId), p = n.postId && M.findPost(n.postId);
@@ -83,7 +87,8 @@
       return M.bar('การแจ้งเตือน', `<button class="link" data-act="readAll">อ่านทั้งหมด</button>`) + `<div class="scroll"><div class="col">
         ${reqs.length ? `<h3 class="sec-t pad">คำขอติดตาม ${reqs.length}</h3><div class="rows">${reqs.map(n => { const u = M.user(n.userId); return `<div class="row">${M.avatar(u, 44)}<span class="row-tx"><span>${M.handle(u)}</span><small>${esc(u.name)}</small></span><button class="btn sm pri" data-act="followReq" data-id="${n.id}" data-v="1">ยืนยัน</button><button class="btn sm sec" data-act="followReq" data-id="${n.id}" data-v="0">ลบ</button></div>`; }).join('')}</div>` : ''}
         ${today.length ? `<h3 class="sec-t pad">วันนี้</h3><div class="rows">${today.map(row).join('')}</div>` : ''}
-        ${older.length ? `<h3 class="sec-t pad">7 วันที่ผ่านมา</h3><div class="rows">${older.map(row).join('')}</div>` : ''}
+        ${week.length ? `<h3 class="sec-t pad">7 วันที่ผ่านมา</h3><div class="rows">${week.map(row).join('')}</div>` : ''}
+        ${older.length ? `<h3 class="sec-t pad">30 วันที่ผ่านมา</h3><div class="rows">${older.map(row).join('')}</div>` : ''}
         ${!ns.length ? `<div class="empty">${M.bud('sleepy', 64)}<p>ยังไม่มีการแจ้งเตือน</p></div>` : ''}
       </div></div>`;
     },

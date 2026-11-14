@@ -182,12 +182,14 @@
       return M.bar('รายการที่บันทึกไว้') + `<div class="scroll"><div class="col">${all.length ? `<div class="grid3">${all.map(M.gridTile).join('')}</div>` : `<div class="empty">${M.bud('happy', 64)}<p>แตะ ${I('bookmark', 16)} ใต้โพสต์เพื่อบันทึกไว้ดูภายหลัง เฉพาะคุณเท่านั้นที่เห็น</p></div>`}</div></div>`;
     }
   };
+  A.unarchiveHl = el => { const h = M.st.highlights.find(x => x.id === el.dataset.id); if (h) { delete h.archived; M.toast(`แสดง "${h.title}" บนโปรไฟล์แล้ว`); M.refresh(); } };
   M.Pages.archive = {
     render(p) {
       const st = M.st;
       const items = [...st.myStory.items.map(i => ({ ...i, live: true })), ...st.archive];
       return M.bar(p.pick ? 'เลือกสตอรี่สำหรับไฮไลต์' : 'คลังสตอรี่', p.pick ? '<button class="link acc" data-act="makeHighlight">ถัดไป</button>' : '') + `<div class="scroll"><div class="col">
         <p class="note pad">สตอรี่ที่หมดอายุจะถูกเก็บไว้ที่นี่ เห็นเฉพาะคุณ</p>
+        ${!p.pick && st.highlights.some(h => h.archived) ? `<h3 class="sec-t pad">ไฮไลต์ที่จัดเก็บ</h3><div class="rows">${st.highlights.filter(h => h.archived).map(h => `<div class="row"><span class="hl-c sm">${M.media(h.items[0])}</span><span class="row-tx"><span>${esc(h.title)}</span><small>${h.items.length} สตอรี่</small></span><button class="btn sm sec" data-act="unarchiveHl" data-id="${h.id}">แสดงบนโปรไฟล์</button></div>`).join('')}</div>` : ''}
         <div class="grid3 tall">${items.map(it => `<label class="cell arch">${M.media(it)}<span class="tile-n">${new Date(it.ts).toLocaleDateString(M.locale(), { day: 'numeric', month: 'short' })}${it.live ? ' · ยังไม่หมดอายุ' : ''}</span>${p.pick ? `<input type="checkbox" class="check" data-aid="${it.id}">` : ''}</label>`).join('') || '<p class="empty">ยังไม่มีสตอรี่ในคลัง</p>'}</div></div></div>`;
     }
   };

@@ -355,5 +355,64 @@
       if (i !== j) { s.mode = MODES[j][0]; M.renderPage(el); }
     };
   }
+  /* ---------------- เปลี่ยนชื่อผู้ใช้ ----------------
+     กติกาเดียวกันทั้งบัญชีในเครื่องและบัญชีออนไลน์: เปลี่ยนได้ 5 ครั้งใน 30 นาที
+     และชื่อเดิมถูกกันไว้ให้คุณเปลี่ยนกลับได้ภายใน 14 วัน */
+  const RES_MS = 14 * 864e5, WIN_MS = 30 * 60e3, MAXC = 5;
+  const fmtOk = h => /^[a-z0-9_.]{3,30}$/.test(h) && !/^\.|\.$|\.\./.test(h);
+  const localInfo = () => {
+    const me = M.st.me, log = (me.handleLog || []).filter(x => Date.now() - x.ts < RES_MS);
+    const prev = log.at(-1);
+    return { handle: me.handle, previous: prev && prev.old !== me.handle ? { handle: prev.old, until: prev.ts + RES_MS } : null, left: Math.max(0, MAXC - log.filter(x => Date.now() - x.ts < WIN_MS).length) };
+  };
+  const localTaken = h => Object.values(M.st.users).some(u => u.handle.toLowerCase() === h);
+  M.Pages.changeHandle = {
+    render(p) {
+      const i = p.info;
+      if (!i) return M.bar('ชื่อผู้ใช้') + '<div class="scroll"><p class="muted center pad">กำลังโหลด…</p></div>';
+      const v = p.value ?? i.handle;
+      return M.bar('ชื่อผู้ใช้', `<button class="link acc" data-act="saveHandle" ${p.ok === false || v === i.handle ? 'disabled' : ''}>เสร็จแล้ว</button>`) + `<div class="scroll"><form class="col pad form ch-form" data-chf>
+        <label class="ch-field"><span>ชื่อผู้ใช้</span><span class="ch-in"><input class="field" name="h" value="${esc(v)}" maxlength="30" autocapitalize="off" autocomplete="off" spellcheck="false" translate="no" aria-describedby="chMsg">
+          <button type="button" class="ibtn sm" data-act="clearHandle" aria-label="ล้าง">${I('x', 16)}</button></span></label>
+        <p id="chMsg" class="ch-msg ${p.ok === false ? 'neg' : p.ok ? 'pos' : ''}" role="status">${p.msg ? esc(p.msg) : ''}</p>
+        ${i.previous ? `<p class="note">เปลี่ยนกลับเป็น <b translate="no">${esc(i.previous.handle)}</b> ได้ถึง ${new Date(i.previous.until).toLocaleDateString(M.locale(), { day: 'numeric', month: 'short' })} ช่วงนี้คนอื่นใช้ชื่อนี้ไม่ได้ <button type="button" class="link acc" data-act="revertHandle">ใช้ชื่อเดิม</button></p>`
+          : `<p class="note">หลังเปลี่ยน คุณจะเปลี่ยนกลับเป็น <b translate="no">${esc(i.handle)}</b> ได้ภายใน 14 วัน และช่วงนั้นคนอื่นใช้ชื่อนี้ไม่ได้</p>`}
+        <p class="note">แก้ไขชื่อผู้ใช้ได้สูงสุด 5 ครั้งใน 30 นาที (เหลือ ${i.left} ครั้ง)</p>
+        <p class="note">ลิงก์โปรไฟล์และการพูดถึง @ ชื่อเดิมจะไม่พาไปที่โปรไฟล์คุณอีก</p></form></div>`;
+    },
+    mount(el, p) {
+      if (!p.info) { (p.online ? M.cloud.api('GET', '/me/handle') : Promise.resolve(localInfo())).then(i => { p.info = i; M.renderPage(el); }).catch(e => { M.toast(e.message); M.back(); }); return; }
+      const inp = el.querySelector('[data-chf] input');
+      const check = M.debounce(async () => {
+        const h = inp.value.trim().toLowerCase().replace(/^@/, ''); p.value = h;
+        if (h === p.info.handle) { p.ok = null; p.msg = ''; }
+        else if (!fmtOk(h)) { p.ok = false; p.msg = 'ใช้ได้เฉพาะ a-z 0-9 _ . ยาว 3–30 ตัว และห้ามขึ้นต้นหรือลงท้ายด้วยจุด'; }
+        else if (p.online) { try { const r = await M.cloud.api('GET', '/handle-available?h=' + encodeURIComponent(h)); p.ok = r.ok; p.msg = r.ok ? 'ใช้ชื่อนี้ได้' : 'ชื่อนี้มีคนใช้แล้ว'; } catch (e) { p.ok = null; p.msg = e.message; } }
+        else { p.ok = !localTaken(h); p.msg = p.ok ? 'ใช้ชื่อนี้ได้' : 'ชื่อนี้มีคนใช้แล้ว'; }
+        const pos = inp.selectionStart; M.renderPage(el); const i2 = el.querySelector('[data-chf] input'); i2.focus(); i2.setSelectionRange(pos, pos);
+      }, 350);
+      inp.oninput = check;
+      el.querySelector('[data-chf]').onsubmit = e => { e.preventDefault(); A.saveHandle(); };
+    }
+  };
+  A.openChangeHandle = el => M.push('changeHandle', { online: el?.dataset?.online === '1' });
+  A.clearHandle = () => { const pg = M.topPage(); pg._params.value = ''; pg._params.ok = false; pg._params.msg = ''; M.renderPage(pg); pg.querySelector('[data-chf] input').focus(); };
+  A.revertHandle = () => { const pg = M.topPage(); pg._params.value = pg._params.info.previous.handle; pg._params.ok = true; pg._params.msg = 'ใช้ชื่อเดิมได้'; M.renderPage(pg); };
+  A.saveHandle = async () => {
+    const pg = M.topPage(), p = pg._params, h = (p.value ?? '').toLowerCase();
+    if (!h || h === p.info.handle) return;
+    if (!fmtOk(h)) return M.toast('ชื่อผู้ใช้ไม่ถูกต้อง');
+    if (p.online) {
+      try { const d = await M.cloud.api('POST', '/me/handle', { handle: h }); M.cloud.me = d.user; }
+      catch (e) { return M.toast(e.message); }
+    } else {
+      const i = localInfo();
+      if (!i.left) return M.toast('เปลี่ยนชื่อผู้ใช้ได้สูงสุด 5 ครั้งใน 30 นาที ลองใหม่ภายหลัง');
+      if (localTaken(h)) return M.toast('ชื่อนี้มีคนใช้แล้ว');
+      const me = M.st.me; me.handleLog = [...(me.handleLog || []), { old: me.handle, new: h, ts: Date.now() }].slice(-20); me.handle = h;
+    }
+    M.toast(`เปลี่ยนชื่อผู้ใช้เป็น @${h} แล้ว`); M.back(); M.refresh();
+  };
+
   A.openCamera = el => M.push('camera', { mode: el?.dataset?.mode || 'story' });
 })(window.M);

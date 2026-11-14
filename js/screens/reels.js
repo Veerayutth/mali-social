@@ -9,7 +9,15 @@
     const w = v => typeof v === 'number' ? 1 : ({ less: .3, normal: 1, more: 1.8 }[v] || 1);
     return st.reels.filter(r => !st.blocked.includes(r.userId) && !st.muted.includes(r.userId) && !st.notInterested.includes(r.id))
       .map(r => ({ r, s: (r.tags || []).reduce((a, t) => a + w(st.interests[t]), 0) / Math.max(1, r.tags?.length || 1) * (r.trial && r.userId !== 'me' ? 1.1 : 1) - (Date.now() - r.ts) / 3.6e8 }))
-      .sort((a, b) => b.s - a.s).map(x => x.r);
+      .sort((a, b) => b.s - a.s).map(x => x.r)
+      .filter(r => M.reelsFeed !== 'friends' || friendsOf(r).length);
+  };
+  // แท็บเพื่อน: Reels ที่เพื่อนสร้าง หรือเพื่อนกดถูกใจ/รีโพสต์ (ข้อมูลกดถูกใจของเพื่อนเป็นข้อมูลจำลองที่คงที่ต่อคลิป)
+  const friendIds = () => Object.values(M.st.users).filter(u => u.friend && !M.st.blocked.includes(u.id)).map(u => u.id);
+  const friendsOf = r => {
+    const f = friendIds();
+    if (f.includes(r.userId)) return [r.userId];
+    return f.filter(id => M.hash(r.id + id) % 3 === 0).slice(0, 3);
   };
 
   const reelHTML = (r, i) => {
@@ -30,7 +38,7 @@
         <button class="rb" data-act="reelMenu" data-id="${r.id}" aria-label="ตัวเลือก">${I('more', 28)}</button>
         <button class="rb disc" data-act="openUser" data-id="${u.id}" aria-label="โปรไฟล์ผู้โพสต์">${M.avatar(u, 32)}</button>
       </div>
-      <div class="reel-meta">
+      <div class="reel-meta">${M.reelFriendsLabel(r)}
         <div class="reel-who"><button class="noring" data-act="openUser" data-id="${u.id}">${M.avatar(u, 32)}</button>${M.handle(u)}
           ${following ? '' : `<button class="btn sm ghost-d" data-act="follow" data-id="${u.id}">ติดตาม</button>`}
           ${r.trial ? '<span class="pill">ทดลอง · แสดงเฉพาะคนที่ยังไม่ติดตาม</span>' : ''}</div>
@@ -64,12 +72,15 @@
     };
   };
 
+  A.reelsFeed = el => { M.reelsFeed = el.dataset.k; const t = document.querySelector('.tab[data-tab="reels"]'); t._top = 0; M.renderTab('reels'); };
+  M.reelFriendsLabel = r => { if (M.reelsFeed !== 'friends') return ''; const f = friendsOf(r).filter(id => id !== r.userId); return f.length ? `<span class="rf-by">${f.map(id => M.avatar(M.user(id), 18)).join('')} ${esc(M.user(f[0]).name.split(' ')[0])}${f.length > 1 ? ` และอีก ${f.length - 1} คน` : ''} ถูกใจ</span>` : ''; };
   M.Tabs.reels = {
-    render: () => `<div class="reels-top"><h1>Reels</h1><span class="sp"></span>
+    render: () => `<div class="reels-top"><div class="reels-tabs" role="tablist"><button role="tab" aria-selected="${M.reelsFeed !== 'friends'}" class="${M.reelsFeed !== 'friends' ? 'on' : ''}" data-act="reelsFeed" data-k="all">Reels</button>
+        <button role="tab" aria-selected="${M.reelsFeed === 'friends'}" class="${M.reelsFeed === 'friends' ? 'on' : ''}" data-act="reelsFeed" data-k="friends">เพื่อน <span class="rf-avs">${friendIds().slice(0, 3).map(id => M.avatar(M.user(id), 20)).join('')}</span></button></div><span class="sp"></span>
         <button class="ibtn" data-act="algorithm" aria-label="อัลกอริทึมของคุณ">${I('tune')}</button>
         <button class="ibtn" data-act="newReel" aria-label="สร้าง Reels">${I('camera')}</button></div>
       <div class="reels" id="reelsScroll">${ranked().map(reelHTML).join('')}
-        <section class="reel end-reel"><div>${M.bud('wink', 80)}<p>ดู Reels ครบแล้ว ลองปรับหัวข้อที่สนใจหรือสร้าง Reels ของคุณเอง</p><button class="btn pri" data-act="newReel">สร้าง Reels</button></div></section></div>
+        <section class="reel end-reel"><div>${M.bud('wink', 80)}<p>${M.reelsFeed === 'friends' ? 'ดู Reels จากเพื่อนครบแล้ว' : 'ดู Reels ครบแล้ว'} ลองปรับหัวข้อที่สนใจหรือสร้าง Reels ของคุณเอง</p><button class="btn pri" data-act="newReel">สร้าง Reels</button></div></section></div>
       ${M.st.tips.reels ? '' : `<div class="reels-tip">${M.tip('reels', 'เลื่อนขึ้นเพื่อดูคลิปถัดไป แตะหนึ่งครั้งเพื่อหยุด แตะสองครั้งเพื่อถูกใจ')}</div>`}`,
     mount(el) {
       const sc = el.querySelector('#reelsScroll');

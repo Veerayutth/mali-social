@@ -53,7 +53,7 @@
           ${it.sticker?.type === 'addyours' ? `<div class="addyours"><small>Add Yours</small><b>${esc(it.sticker.prompt)}</b><span class="muted">${M.num(it.sticker.count + (it.sticker.joined ? 1 : 0))} คนร่วมเล่น</span><button class="btn sm pri" data-sv="addYours">${it.sticker.joined ? 'ร่วมแล้ว' : 'ร่วมเล่น'}</button></div>` : ''}
           <button class="sv-nav prev" data-sv="prev" aria-label="ก่อนหน้า"></button><button class="sv-nav next" data-sv="next" aria-label="ถัดไป"></button>
           <div class="sv-foot">${g.mine || p.highlight
-            ? `<button class="btn sm ghost-d" data-sv="viewers">${I('eye', 18)} ผู้ชม ${(it.views || 0)} คน</button><span class="sp"></span><button class="btn sm ghost-d" data-sv="toHighlight">${I('star', 18)} ไฮไลต์</button><button class="ibtn" data-sv="delete" aria-label="ลบ">${I('trash', 20)}</button>`
+            ? `<button class="btn sm ghost-d" data-sv="viewers">${I('eye', 18)} ผู้ชม ${(it.views || 0)} คน</button><span class="sp"></span>${p.highlight ? `<button class="btn sm ghost-d" data-sv="hlMenu">${I('more', 18)} เพิ่มเติม</button>` : `<button class="btn sm ghost-d" data-sv="toHighlight">${I('star', 18)} ไฮไลต์</button><button class="ibtn" data-sv="delete" aria-label="ลบ">${I('trash', 20)}</button>`}`
             : `<form class="sv-reply"><input class="field d" name="t" placeholder="ตอบกลับ ${esc(u.handle)}" autocomplete="off"><button class="ibtn like${it.liked ? ' on' : ''}" type="button" data-sv="like" aria-label="ถูกใจ">${I('heart')}</button><button class="ibtn" aria-label="ส่ง">${I('send')}</button></form>`}</div>`;
         const f = box.querySelector('.sv-reply');
         if (f) {
@@ -117,6 +117,26 @@
           if (!h) { h = { id: M.uid('h'), title, items: [] }; st.highlights.push(h); }
           h.items.push({ art: it.art, img: it.img, overlays: it.overlays });
           M.toast(`เพิ่มลง "${title}" แล้ว`); M.save();
+        }
+        else if (a === 'hlMenu') {
+          paused = true;
+          const h = st.highlights.find(x => x.id === p.highlight);
+          M.menu([
+            { label: 'แก้ไขไฮไลต์', sub: 'เปลี่ยนชื่อ หรือใช้ภาพนี้เป็นปก', icon: 'edit', act: async () => {
+              const t = await M.prompt('แก้ไขไฮไลต์', h.title, 'ชื่อไฮไลต์', { max: 16, ok: 'บันทึก' });
+              if (t && t.trim()) h.title = t.trim();
+              if (ii > 0 && await M.confirm('ใช้ภาพนี้เป็นปกไฮไลต์ไหม', '', 'ใช้เป็นปก')) h.items.unshift(...h.items.splice(ii, 1));
+              M.save(); paused = false; M.toast('บันทึกไฮไลต์แล้ว');
+            } },
+            { label: 'จัดเก็บไฮไลต์', sub: 'ซ่อนจากโปรไฟล์ กู้คืนได้ที่คลังสตอรี่', icon: 'archive', act: () => {
+              h.archived = true; M.save(); cancelAnimationFrame(raf); M.back(); M.refresh(); M.toast('จัดเก็บไฮไลต์แล้ว ดูได้ที่คลังสตอรี่');
+            } },
+            { label: 'ลบออกจากไฮไลต์', icon: 'trash', danger: true, act: async () => {
+              if (!(await M.confirm('ลบสตอรี่นี้ออกจากไฮไลต์ไหม', 'สตอรี่ยังอยู่ในคลังสตอรี่', 'ลบออก', true))) { paused = false; return; }
+              h.items.splice(ii, 1); if (!h.items.length) st.highlights = st.highlights.filter(x => x !== h);
+              M.save(); cancelAnimationFrame(raf); M.back(); M.refresh();
+            } }
+          ], esc(h.title));
         }
         else if (a === 'delete') {
           paused = true;
