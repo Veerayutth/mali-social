@@ -16,7 +16,7 @@ const { DatabaseSync } = require('node:sqlite');
 const kms = require('./kms');
 const PROD = process.env.NODE_ENV === 'production';
 
-const PORT = +process.env.PORT || 8787;
+const PORT = process.env.PORT != null && process.env.PORT !== '' ? +process.env.PORT : 8787;
 const HOST = process.env.HOST || '0.0.0.0';
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.resolve(process.env.MALI_DATA || path.join(__dirname, 'data'));
@@ -24,10 +24,19 @@ const MEDIA = path.join(DATA, 'media');
 const FORCE_SECURE = process.env.HTTPS === '1'; // บังคับคุกกี้ Secure เสมอ
 fs.mkdirSync(MEDIA, { recursive: true });
 
-/* ---------------- ฐานข้อมูล ---------------- */
-const db = new DatabaseSync(path.join(DATA, 'mali.db'));
+/* ---------------- ฐานข้อมูล ----------------
+   โหมด netlify: ไฟล์ฐานข้อมูลถูกดึง/ส่งกลับ Netlify Blobs ระหว่างคำขอ จึงห่อด้วยตัวแทนที่เปิดไฟล์ใหม่ได้ */
+const SERVERLESS = process.env.MALI_MODE === 'netlify';
+const DB_FILE = path.join(DATA, 'mali.db');
+let realDb = new DatabaseSync(DB_FILE);
+const db = { prepare: s => realDb.prepare(s), exec: s => realDb.exec(s) };
+globalThis.__maliDb = {
+  reopen() { try { realDb.close(); } catch {} realDb = new DatabaseSync(DB_FILE); realDb.exec('PRAGMA foreign_keys = ON;'); },
+  changes: () => realDb.prepare('SELECT total_changes() n').get().n,
+  file: DB_FILE
+};
 db.exec(`
-  PRAGMA journal_mode = WAL;
+  PRAGMA journal_mode = ${SERVERLESS ? 'DELETE' : 'WAL'};
   PRAGMA foreign_keys = ON;
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY, handle TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
@@ -192,7 +201,7 @@ function createSession(res, userId, req) {
   const unusual = (!seenDev && q('SELECT COUNT(*) n FROM sessions WHERE user_id = ?').get(userId).n > 1) || (country && lastCountry && country !== lastCountry);
   if (unusual) {
     G.event('new_device_login', { userId, ip, severity: country && lastCountry && country !== lastCountry ? 'high' : 'info', detail: { device: dev.label, country } });
-    setTimeout(() => emit(userId, 'security', { text: `เข้าสู่ระบบจากอุปกรณ์ใหม่: ${dev.label}${country ? ' (' + country + ')' : ''}` }), 50);
+    emit(userId, 'security', { text: `เข้าสู่ระบบจากอุปกรณ์ใหม่: ${dev.label}${country ? ' (' + country + ')' : ''}` });
   }
   addCookie(res, `mali_s_${userId}=${token}; ${cookieOpts(req, SESSION_DAYS * 86400)}`);
   addCookie(res, `mali_a=${userId}; ${cookieOpts(req, SESSION_DAYS * 86400)}`);
@@ -258,7 +267,13 @@ const pairOf = (a, b) => [a, b].sort().join('|');
 const streams = new Map(); // userId → Set<res>  (SSE)
 const queues = new Map();  // userId → { seq, events: [{seq,type,data,ts}], waiters: Set<fn> }  (long-poll สำรอง)
 let SEQ = Date.now();
+db.exec('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, ts INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS events_user ON events(user_id, id);');
 function emit(userId, type, data) {
+  if (SERVERLESS) { // หลายอินสแตนซ์: เก็บเหตุการณ์ไว้ในฐานข้อมูลให้ /api/poll อ่าน
+    q('INSERT INTO events (user_id, type, data, ts) VALUES (?,?,?,?)').run(userId, type, JSON.stringify(data), now());
+    if (Math.random() < .05) q('DELETE FROM events WHERE ts < ?').run(now() - 3600e3);
+    return;
+  }
   const set = streams.get(userId);
   if (set) { const line = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`; for (const r of set) r.write(line); }
   // เก็บเหตุการณ์ล่าสุดไว้ให้ผู้ใช้ที่ใช้ long-poll (เช่นผ่านพร็อกซีที่บัฟเฟอร์ SSE)
@@ -283,7 +298,24 @@ const MEDIA_TYPES = {
   'video/webm': { ext: 'webm', max: 60 << 20, magic: b => b.slice(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) }
 };
 const MIME_BY_EXT = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', json: 'application/json', webmanifest: 'application/manifest+json', png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml', mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', md: 'text/plain; charset=utf-8' };
-const mediaUrlOk = u => typeof u === 'string' && /^\/media\/[A-Za-z0-9_-]{12,40}\.(jpg|png|webp|gif|mp4|mov|webm)$/.test(u) && fs.existsSync(path.join(MEDIA, path.basename(u)));
+// ไฟล์สื่อ: เก็บในโฟลเดอร์ (เซิร์ฟเวอร์ปกติ) หรือ Netlify Blobs (MEDIA_STORE=blobs)
+const MEDIA_BLOBS = process.env.MEDIA_STORE === 'blobs';
+let mediaStoreP = null;
+const mediaStore = () => mediaStoreP || (mediaStoreP = import('@netlify/blobs').then(m => m.getStore({ name: 'mali-media', consistency: 'strong' })));
+async function mediaPut(name, buf) {
+  if (MEDIA_BLOBS) { const r = await (await mediaStore()).set(name, buf, { onlyIfNew: true }); if (!r.modified) fail(500, 'บันทึกไฟล์ไม่สำเร็จ'); return; }
+  fs.writeFileSync(path.join(MEDIA, name), buf, { flag: 'wx', mode: 0o600 });
+}
+async function mediaGet(name) {
+  if (MEDIA_BLOBS) { const ab = await (await mediaStore()).get(name, { type: 'arrayBuffer' }); return ab ? Buffer.from(ab) : null; }
+  try { return fs.readFileSync(path.join(MEDIA, name)); } catch { return null; }
+}
+const mediaNameOk = u => typeof u === 'string' && /^\/media\/[A-Za-z0-9_-]{12,40}\.(jpg|png|webp|gif|mp4|mov|webm)$/.test(u);
+async function mediaUrlOk(u) {
+  if (!mediaNameOk(u)) return false;
+  if (MEDIA_BLOBS) return !!(await (await mediaStore()).getMetadata(path.basename(u)));
+  return fs.existsSync(path.join(MEDIA, path.basename(u)));
+}
 const SECURITY_TXT = `Contact: ${process.env.SECURITY_CONTACT || 'mailto:security@mali.example'}
 Expires: ${new Date(Date.now() + 300 * 864e5).toISOString()}
 Preferred-Languages: th, en
@@ -294,7 +326,7 @@ Policy: ${process.env.PUBLIC_URL || ''}/security-policy
 const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, pattern, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
 
-route('GET', '/api/health', () => { q('SELECT 1').get(); return { ok: true, app: 'mali', version: 2 }; });
+route('GET', '/api/health', () => { q('SELECT 1').get(); return { ok: true, app: 'mali', version: 2, realtime: SERVERLESS ? 'poll' : 'sse' }; });
 
 route('POST', '/api/auth/signup', async (req, res) => {
   const ip = clientIp(req), w = limited('signup:' + ip, 20, 3600e3);
@@ -373,7 +405,7 @@ route('PATCH', '/api/me', async req => {
   const name = b.name != null ? str(b.name, 40, 'ชื่อ') || u.name : u.name;
   const bio = b.bio != null ? str(b.bio, 150, 'Bio') : u.bio;
   let avatar = u.avatar;
-  if (b.avatar !== undefined) { if (b.avatar === null) avatar = null; else if (mediaUrlOk(b.avatar) && /\.(jpg|png|webp|gif)$/.test(b.avatar)) avatar = b.avatar; else fail(400, 'รูปโปรไฟล์ไม่ถูกต้อง'); }
+  if (b.avatar !== undefined) { if (b.avatar === null) avatar = null; else if (await mediaUrlOk(b.avatar) && /\.(jpg|png|webp|gif)$/.test(b.avatar)) avatar = b.avatar; else fail(400, 'รูปโปรไฟล์ไม่ถูกต้อง'); }
   q('UPDATE users SET name = ?, bio = ?, avatar = ? WHERE id = ?').run(name, bio, avatar, u.id);
   return { user: pubUser(q('SELECT * FROM users WHERE id = ?').get(u.id)) };
 });
@@ -483,7 +515,7 @@ route('POST', '/api/posts', async req => {
   const b = await readJson(req);
   const caption = str(b.caption || '', 2200, 'คำบรรยาย');
   const media = Array.isArray(b.media) ? b.media.slice(0, 10) : [];
-  if (!media.every(mediaUrlOk)) fail(400, 'ไฟล์แนบไม่ถูกต้อง');
+  for (const u of media) if (!(await mediaUrlOk(u))) fail(400, 'ไฟล์แนบไม่ถูกต้อง');
   if (!caption && !media.length) fail(400, 'โพสต์ว่างไม่ได้');
   const id = newId('p_');
   q('INSERT INTO posts (id, user_id, caption, media, created) VALUES (?,?,?,?,?)').run(id, me.id, caption, JSON.stringify(media), now());
@@ -548,7 +580,7 @@ route('POST', '/api/chats/:handle', async (req, res, p) => {
   if (u.id === me.id) fail(400, 'ส่งข้อความหาตัวเองไม่ได้');
   const b = await readJson(req);
   const text = str(b.text || '', 2000, 'ข้อความ');
-  const media = b.media == null ? null : mediaUrlOk(b.media) ? b.media : fail(400, 'ไฟล์แนบไม่ถูกต้อง');
+  const media = b.media == null ? null : (await mediaUrlOk(b.media)) ? b.media : fail(400, 'ไฟล์แนบไม่ถูกต้อง');
   if (!text && !media) fail(400, 'ข้อความว่างไม่ได้');
   const follows = (a, b) => !!q('SELECT 1 FROM follows WHERE follower = ? AND followee = ?').get(a, b);
   const known = follows(u.id, me.id) || q('SELECT 1 FROM messages WHERE pair = ? AND from_id = ?').get(pairOf(me.id, u.id), u.id);
@@ -579,11 +611,12 @@ route('POST', '/api/upload', async req => {
   const buf = await readBody(req, t.max);
   if (buf.length < 16 || !t.magic(buf)) fail(415, 'เนื้อไฟล์ไม่ตรงกับชนิดไฟล์');
   const name = crypto.randomBytes(16).toString('base64url') + '.' + t.ext;
-  fs.writeFileSync(path.join(MEDIA, name), kms.sealFile(buf), { flag: 'wx', mode: 0o600 });
+  await mediaPut(name, kms.sealFile(buf));
   return { url: '/media/' + name, type: type.split('/')[0] };
 });
 
 route('GET', '/api/events', (req, res) => {
+  if (SERVERLESS) fail(404, 'ใช้ /api/poll');
   const me = needUser(req);
   const set = streams.get(me.id) || new Set();
   if (set.size >= 10) fail(429, 'เปิดการเชื่อมต่อมากเกินไป');
@@ -598,10 +631,17 @@ route('GET', '/api/events', (req, res) => {
 route('GET', '/api/poll', (req, res, p, url) => {
   const me = needUser(req);
   const after = +url.searchParams.get('after') || 0;
+  if (SERVERLESS) { // ตอบทันที ไคลเอนต์จะถามใหม่เป็นระยะ (ฟังก์ชันรอนานไม่ได้)
+    if (url.searchParams.has('init')) return { seq: q('SELECT COALESCE(MAX(id), 0) n FROM events').get().n, events: [], interval: 5000 };
+    const rows = q('SELECT * FROM events WHERE user_id = ? AND id > ? ORDER BY id LIMIT 100').all(me.id, after);
+    const seq = rows.length ? rows[rows.length - 1].id : Math.max(after, q('SELECT COALESCE(MAX(id), 0) n FROM events').get().n);
+    return { seq, events: rows.map(r => ({ seq: r.id, type: r.type, data: JSON.parse(r.data) })), interval: 5000 };
+  }
   const qu = queues.get(me.id) || { events: [], waiters: new Set() };
   queues.set(me.id, qu);
   const pending = () => qu.events.filter(e => e.seq > after);
-  if (after === 0 || pending().length) return { seq: after === 0 ? SEQ : qu.events[qu.events.length - 1].seq, events: after === 0 ? [] : pending().map(({ seq, type, data }) => ({ seq, type, data })) };
+  const init = url.searchParams.has('init') || after === 0;
+  if (init || pending().length) return { seq: init ? SEQ : qu.events[qu.events.length - 1].seq, events: init ? [] : pending().map(({ seq, type, data }) => ({ seq, type, data })) };
   if (qu.waiters.size >= 10) fail(429, 'เปิดการเชื่อมต่อมากเกินไป');
   return new Promise(resolve => {
     const done = () => { clearTimeout(tm); qu.waiters.delete(done); const ev = pending(); resolve({ seq: ev.length ? ev[ev.length - 1].seq : after, events: ev.map(({ seq, type, data }) => ({ seq, type, data })) }); };
@@ -839,17 +879,18 @@ function serveStatic(req, res, pathname) {
   if (pathname === '/' || pathname === '/index.html') rel = 'index.html';
   else if (pathname === '/sw.js' || pathname === '/manifest.webmanifest') rel = pathname.slice(1);
   else if (/^\/(css|js|icons)\/[\w\-./]+$/.test(pathname) && !pathname.includes('..')) rel = pathname.slice(1);
-  else if (/^\/media\/[A-Za-z0-9_-]+\.\w+$/.test(pathname)) return serveMedia(req, res, path.join(MEDIA, path.basename(pathname)));
+  else if (/^\/media\/[A-Za-z0-9_-]+\.\w+$/.test(pathname)) { serveMedia(req, res, path.join(MEDIA, path.basename(pathname))).catch(() => { if (!res.headersSent) send(res, 404, 'Not found'); }); return true; }
   else if (pathname === '/.well-known/security.txt' || pathname === '/security.txt') { send(res, 200, SECURITY_TXT); return true; }
   else return false;
   return serveFile(req, res, path.join(ROOT, rel), false);
 }
 // ไฟล์สื่อถูกเข้ารหัสบนดิสก์ ถอดรหัสในหน่วยความจำก่อนส่ง (รองรับ Range สำหรับวิดีโอ)
 const mediaCache = new Map(); let mediaCacheBytes = 0;
-function serveMedia(req, res, file) {
+async function serveMedia(req, res, file) {
   let buf = mediaCache.get(file);
   if (!buf) {
-    try { buf = kms.openFile(fs.readFileSync(file)); } catch (e) { send(res, 404, 'Not found'); return true; }
+    const raw = await mediaGet(path.basename(file));
+    try { if (!raw) throw 0; buf = kms.openFile(raw); } catch (e) { send(res, 404, 'Not found'); return true; }
     if (buf.length < 8 << 20) { mediaCache.set(file, buf); mediaCacheBytes += buf.length; while (mediaCacheBytes > 64 << 20) { const [k, v] = mediaCache.entries().next().value; mediaCache.delete(k); mediaCacheBytes -= v.length; } }
   }
   const ext = path.extname(file).slice(1).toLowerCase();

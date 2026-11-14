@@ -39,7 +39,7 @@
     if (C.checked) return C.available;
     C.checked = true;
     if (!/^https?:$/.test(location.protocol)) return (C.available = false);
-    try { const r = await fetch('/api/health', { cache: 'no-store' }); const d = await r.json(); C.available = d?.app === 'mali'; } catch { C.available = false; }
+    try { const r = await fetch('/api/health', { cache: 'no-store' }); const d = await r.json(); C.available = d?.app === 'mali'; C.realtime = d?.realtime || 'sse'; } catch { C.available = false; }
     if (C.available) {
       try { const d = await C.api('GET', '/me', undefined, { quiet401: true }); C.me = d.user; C.unread = d.unread || 0; } catch {}
       if (C.me) C.connect();
@@ -59,6 +59,7 @@
   };
   C.connect = () => {
     if (C.es || C.polling || !C.me) return;
+    if (C.realtime === 'poll') return startPolling(); // เซิร์ฟเวอร์แบบ serverless (Netlify) ใช้การถามเป็นระยะ
     const es = C.es = new EventSource('/api/events');
     let ok = false;
     es.addEventListener('hello', () => { ok = true; });
@@ -68,13 +69,15 @@
   async function startPolling() {
     if (C.polling) return;
     const run = C.polling = {};
-    let seq = 0, delay = 1000;
+    let seq = 0, delay = 1000, first = true;
     while (C.polling === run && C.me) {
       try {
-        const d = await C.api('GET', '/poll?after=' + seq);
+        const d = await C.api('GET', first ? '/poll?init=1' : '/poll?after=' + seq); first = false;
         if (C.polling !== run) break;
-        if (seq) d.events.forEach(e => { try { handlers[e.type]?.(e.data); } catch (err) { console.warn(err); } });
+        d.events.forEach(e => { try { handlers[e.type]?.(e.data); } catch (err) { console.warn(err); } });
         seq = d.seq; delay = 1000;
+        // เซิร์ฟเวอร์ที่ตอบทันที: รอตามระยะที่บอกมา และถามช้าลงเมื่อไม่ได้เปิดหน้าแอปอยู่ (ประหยัดโควตา)
+        if (d.interval && !d.events.length) await M.sleep(document.visibilityState === 'visible' ? d.interval : d.interval * 6);
       } catch (e) { if (e.status === 401) break; await M.sleep(delay); delay = Math.min(delay * 2, 30000); }
     }
     if (C.polling === run) C.polling = null;

@@ -4,3 +4,7 @@ node_modules/
 server/data/
 mali-qr.png
 server/keys/
+dist/
+.netlify/
+node_modules/
+.env

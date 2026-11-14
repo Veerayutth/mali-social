@@ -1,0 +1,9 @@
+{
+  "name": "mali-social",
+  "private": true,
+  "type": "commonjs",
+  "engines": { "node": ">=22.5" },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.9"
+  }
+}
