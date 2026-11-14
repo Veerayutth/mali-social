@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f4ee">
+  <title>มะลิ · ต้นแบบแอปโซเชียล</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <nav id="nav" class="nav glass" aria-label="เมนูหลัก"></nav>
+    <main id="main">
+      <section class="tab" data-tab="home" aria-label="หน้าหลัก"></section>
+      <section class="tab" data-tab="chat" aria-label="แชต"></section>
+      <section class="tab dark" data-tab="reels" aria-label="Reels"></section>
+      <section class="tab" data-tab="profile" aria-label="โปรไฟล์"></section>
+      <div id="pages"></div>
+    </main>
+    <div id="layer"></div>
+  </div>
+
+  <!-- core: ไม่ใช้ ES module เพื่อให้เปิดไฟล์ได้ตรงจาก file:// -->
+  <script src="js/core/util.js"></script>
+  <script src="js/core/icons.js"></script>
+  <script src="js/core/art.js"></script>
+  <script src="js/core/ui.js"></script>
+  <script src="js/core/security.js"></script>
+  <script src="js/core/adult-filter.js"></script>
+  <script src="js/core/appearance.js"></script>
+  <script src="js/core/i18n.js"></script>
+  <script src="js/data/seed.js"></script>
+  <script src="js/data/i18n-en.js"></script>
+  <!-- screens -->
+  <script src="js/screens/home.js"></script>
+  <script src="js/screens/stories.js"></script>
+  <script src="js/screens/reels.js"></script>
+  <script src="js/screens/explore.js"></script>
+  <script src="js/screens/profile.js"></script>
+  <script src="js/screens/chat.js"></script>
+  <script src="js/screens/hub.js"></script>
+  <script src="js/screens/create.js"></script>
+  <script src="js/screens/settings.js"></script>
+  <script src="js/screens/security-center.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
