@@ -11,7 +11,7 @@
     const queue = st.stories.filter(s => M.activeStory(s.userId) && !st.muted.includes(s.userId) && !st.blocked.includes(s.userId)).map(s => s.userId);
     M.push('story', { queue, i: Math.max(0, queue.indexOf(id)) });
   };
-  A.newStory = () => M.push('editor', { type: 'story' });
+  A.newStory = () => M.push('camera', { mode: 'story' });
   A.openHighlight = el => {
     const h = M.st.highlights.find(x => x.id === el.dataset.id);
     M.push('story', { highlight: h.id, queue: ['me'], i: 0 });

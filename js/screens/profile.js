@@ -17,7 +17,7 @@
     const posts = mine ? myGrid().length : st.posts.filter(p => p.userId === u.id).length;
     const note = mine ? st.me.note : st.notes[u.id];
     const noteHTML = note && Date.now() - note.ts < M.T.DAY
-      ? `<button class="note-bub" ${mine ? 'data-act="editNote"' : ''}>${note.music ? `${I('music', 12)} ` : ''}${esc(note.text || (note.music ? M.TRACKS.find(t => t.id === note.music)?.name : ''))}</button>`
+      ? `<button class="note-bub"${M.noteStyle(note)} ${mine ? 'data-act="editNote"' : ''}>${note.music ? `${I('music', 12)} ` : ''}${esc(note.text || (note.music ? M.TRACKS.find(t => t.id === note.music)?.name : ''))}</button>`
       : mine ? `<button class="note-bub add" data-act="editNote">แตะเพื่อเพิ่มโน้ต</button>` : '';
     const following = u.id === 'me' ? st.following.length : u.followingCount;
     return `${M.bannerHTML(u, mine)}<div class="pf${u.banner || mine ? ' has-banner' : ''}">

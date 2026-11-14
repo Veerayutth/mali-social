@@ -5,6 +5,7 @@
   const KIND_TAG = { sea: 'travel', mountain: 'nature', city: 'city', temple: 'travel', food: 'food', cafe: 'cafe', market: 'travel', forest: 'nature', flower: 'art', abstract: 'art' };
 
   A.openCreate = () => M.menu([
+    { label: 'กล้อง', sub: 'ถ่ายหรืออัดวิดีโอ แล้วเลือกเป็นโพสต์ สตอรี่ Instants หรือ Reels', icon: 'camera', act: () => M.push('camera', { mode: 'story' }) },
     { label: 'โพสต์', sub: 'รูปหรือวิดีโอสูงสุด 10 รายการ สัดส่วน 3:4', icon: 'grid', act: () => M.push('editor', { type: 'post' }) },
     { label: 'สตอรี่', sub: 'หายไปใน 24 ชั่วโมง', icon: 'clock', act: () => M.push('editor', { type: 'story' }) },
     { label: 'Reels', sub: 'วิดีโอสั้นแนวตั้ง ตัดต่อและใส่เพลงได้', icon: 'reels', act: () => M.push('editor', { type: 'reel' }) },
@@ -39,7 +40,7 @@
         if (!s) return `<div class="ed-stage empty" style="aspect-ratio:${ratio()}"><div>${M.bud('wow', 72)}<p>เลือกรูปหรือวิดีโอจากเครื่อง หรือใช้ภาพตัวอย่างด้านล่าง</p><button class="btn pri" data-e="upload">${I('upload', 18)} เลือกจากเครื่อง</button></div></div>`;
         return `<div class="ed-stage" style="aspect-ratio:${ratio()}" data-stage>
           <div class="ed-media">${M.media({ ...s, overlays: [] }, { motion: d.type === 'reel' })}${d.camOn ? '<video class="ed-cam" autoplay playsinline muted></video>' : ''}</div>
-          ${(s.overlays || []).map((o, i) => `<span class="ov ${o.type === 'text' ? 'ov-text' : o.type === 'sticker' ? 'ov-stk' : 'ov-chip'} drag" data-ov="${i}" style="left:${o.x}%;top:${o.y}%;${o.color ? 'color:' + o.color : ''}">${o.type === 'sticker' ? M.sticker(o.i, 64) : (o.type === 'music' ? I('music', 14) + ' ' : o.type === 'loc' ? I('pin', 14) + ' ' : '') + esc(o.text)}</span>`).join('')}
+          ${(s.overlays || []).map((o, i) => `<span class="ov ${o.type === 'text' ? 'ov-text' : o.type === 'sticker' || o.type === 'gif' ? 'ov-stk' : 'ov-chip'} drag" data-ov="${i}" style="left:${o.x}%;top:${o.y}%;${o.color ? 'color:' + o.color : ''}">${o.type === 'sticker' ? M.sticker(o.i, 64, o.a) : o.type === 'gif' ? M.gifHTML(o.src, 72) : (o.type === 'music' ? I('music', 14) + ' ' : o.type === 'loc' ? I('pin', 14) + ' ' : '') + esc(o.text)}</span>`).join('')}
           ${d.music ? `<span class="ed-music">${I('music', 14)} ${esc(M.TRACKS.find(t => t.id === d.music).name)}</span>` : ''}
           ${d.prompting ? `<div class="prompter"><div style="animation-duration:${Math.max(8, d.script.length / (d.promptSpeed || 6))}s">${esc(d.script).replace(/\n/g, '<br>')}</div></div>` : ''}
           ${d.type === 'reel' && d.dub ? `<span class="ed-dub">${I('translate', 14)} พากย์ AI: ไทย → อังกฤษ</span>` : ''}
@@ -57,10 +58,13 @@
         switch (d.tool) {
           case 'filter': return `<div class="hscroll chips">${Object.keys(M.FILTERS).map(f => `<button class="flt${(s.filter || 'none') === f ? ' on' : ''}" data-e="filter" data-f="${f}"><span style="filter:${M.FILTERS[f]}">${M.media({ ...s, overlays: [], filter: null })}</span>${M.FILTER_TH[f]}</button>`).join('')}</div>`;
           case 'text': return `<form class="row-form" data-txt><input class="field" name="t" placeholder="พิมพ์ข้อความบนภาพ" maxlength="60"><div class="swatches">${['#ffffff', '#1f1b16', '#c4411a', '#f6d365'].map((c, i) => `<label><input type="radio" name="c" value="${c}" ${i ? '' : 'checked'}><i style="background:${c}"></i></label>`).join('')}</div><button class="btn sm pri">เพิ่ม</button></form><p class="note">ลากข้อความบนภาพเพื่อย้าย แตะเพื่อลบ</p>`;
-          case 'sticker': return `<div class="hscroll stk-row">${M.STICKERS.map((_, i) => `<button data-e="stk" data-i="${i}">${M.sticker(i, 64)}</button>`).join('')}</div>
+          case 'sticker': return `<span class="lbl">เคลื่อนไหว</span><div class="hscroll stk-row">${M.ANIM_STICKERS.map(([i, a]) => `<button data-e="stk" data-i="${i}" data-a="${a}" aria-label="${esc(M.STICKERS[i].t)} (${M.ANIMS[a]})">${M.sticker(i, 64, a)}</button>`).join('')}</div>
+            <span class="lbl">น้องตูม</span><div class="hscroll stk-row">${M.STICKERS.map((_, i) => `<button data-e="stk" data-i="${i}" aria-label="${esc(M.STICKERS[i].t)}">${M.sticker(i, 64)}</button>`).join('')}</div>
+            <span class="lbl">GIF ของคุณ</span><div class="hscroll stk-row"><button class="gif-add" data-e="gifup" aria-label="เพิ่ม GIF จากเครื่อง">${I('plus', 22)}<small>เพิ่ม GIF</small></button>${(st.myGifs || []).map((g, i) => `<button data-e="gif" data-i="${i}" aria-label="GIF ${i + 1}">${M.gifHTML(g, 64)}</button>`).join('')}</div>
             <div class="chips"><button class="chip" data-e="locstk">${I('pin', 14)} สถานที่</button>${d.type === 'story' ? `<button class="chip" data-e="addyours">Add Yours</button>` : ''}${d.music ? `<button class="chip" data-e="musicstk">${I('music', 14)} สติกเกอร์เพลง</button>` : ''}</div>
             ${d.addYours ? `<p class="note">สติกเกอร์ Add Yours: "${esc(d.addYours)}" เพื่อนแตะเพื่อเล่นต่อได้</p>` : ''}`;
-          case 'music': return `<div class="rows">${M.TRACKS.map(t => `<button class="row tight" data-e="music" data-id="${t.id}"><span class="row-ic">${I('music', 20)}</span><span class="row-tx"><span>${esc(t.name)}</span><small>${esc(t.artist)} · ${t.len}</small></span>${d.music === t.id ? I('check', 20, 'acc') : ''}</button>`).join('')}</div><p class="note">เพลงในต้นแบบเป็นชื่อสมมติ ไม่มีเสียงจริง</p>`;
+          case 'music': { const tr = d.music && M.TRACKS.find(t => t.id === d.music);
+            return `<button class="row" data-e="musicpick"><span class="row-ic">${I('music', 20)}</span><span class="row-tx"><span>${tr ? esc(tr.name) : 'เลือกเพลง'}</span><small>${tr ? esc(tr.artist) + ' · ' + tr.len : 'ค้นหา เพลงมาแรง และเพลงที่บันทึกไว้'}</small></span>${I('chev', 18)}</button>${tr ? '<button class="link" data-e="musicoff">เอาเพลงออก</button>' : ''}`; }
           case 'trim': return `<div class="trim"><div class="trim-bar"><i style="left:${d.trim[0] / d.len * 100}%;right:${100 - d.trim[1] / d.len * 100}%"></i></div>
             <label>เริ่ม ${M.dur(d.trim[0])}<input type="range" min="0" max="${d.len}" step="0.5" value="${d.trim[0]}" data-trim="0"></label>
             <label>จบ ${M.dur(d.trim[1])}<input type="range" min="0" max="${d.len}" step="0.5" value="${d.trim[1]}" data-trim="1"></label>
@@ -157,11 +161,15 @@
         if (k === 'mv') { const i = +b.dataset.i; [d.slides[i - 1], d.slides[i]] = [d.slides[i], d.slides[i - 1]]; d.cur = i - 1; }
         if (k === 'tool') d.tool = b.dataset.k;
         if (k === 'filter') slide().filter = b.dataset.f === 'none' ? null : b.dataset.f;
-        if (k === 'stk') slide().overlays.push({ type: 'sticker', i: +b.dataset.i, x: 35, y: 35 });
+        if (k === 'stk') slide().overlays.push({ type: 'sticker', i: +b.dataset.i, a: b.dataset.a || undefined, x: 35, y: 35 });
+        if (k === 'gif') slide().overlays.push({ type: 'gif', src: st.myGifs[+b.dataset.i], x: 35, y: 35 });
+        if (k === 'gifup') { const g = await M.addMyGif(); if (g) slide().overlays.push({ type: 'gif', src: g, x: 35, y: 35 }); }
         if (k === 'locstk') { const t = await M.prompt('สติกเกอร์สถานที่', d.location, 'เช่น ตลาดน้อย'); if (t) slide().overlays.push({ type: 'loc', text: t, x: 30, y: 70 }); }
         if (k === 'musicstk') slide().overlays.push({ type: 'music', text: M.TRACKS.find(t => t.id === d.music).name, x: 25, y: 20 });
         if (k === 'addyours') { const t = await M.prompt('สติกเกอร์ Add Yours', d.addYours, 'ชวนเพื่อนเล่นต่อ เช่น วิวจากหน้าต่างวันนี้'); if (t) d.addYours = t; }
         if (k === 'music') d.music = d.music === b.dataset.id ? null : b.dataset.id;
+        if (k === 'musicpick') { const v = await M.pickMusic(d.music || ''); if (v !== null) d.music = v || null; }
+        if (k === 'musicoff') d.music = null;
         if (k === 'speed') d.speed = +b.dataset.v;
         if (k === 'aspect') d.aspect = b.dataset.v;
         if (k === 'aud') d.audience = b.dataset.v;

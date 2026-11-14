@@ -1,7 +1,7 @@
 /* Service worker: ทำให้ติดตั้งเป็นแอปและเปิดแบบออฟไลน์ได้
    - ไฟล์ของแอป: ลองโหลดจากเครือข่ายก่อน (ได้เวอร์ชันล่าสุดเสมอ) ถ้าออฟไลน์ใช้สำเนาในแคช
    - ฟอนต์ Google และโมเดลตัวกรอง 18+ จาก jsDelivr: ใช้แคชก่อน (ไฟล์ระบุเวอร์ชัน ไม่เปลี่ยน) */
-const VERSION = 'mali-v3';
+const VERSION = 'mali-v4';
 const SHELL = [
     './',
     './css/app.css',
@@ -34,6 +34,7 @@ const SHELL = [
     './js/screens/security-center.js',
     './js/screens/settings.js',
     './js/screens/stories.js',
+    './js/screens/studio.js',
     './manifest.webmanifest',
 ];
 const CDN = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net'];

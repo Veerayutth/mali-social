@@ -899,3 +899,80 @@ small.strong { color: var(--tx); font-weight: 600; }
 .on-rel { gap: 12px; }
 .on-rel .row-tx { flex: 1; min-width: 0; text-align: left; color: var(--tx); display: flex; flex-direction: column; }
 .on-rel .row-tx small { color: var(--tx3); }
+
+/* ---------- สติกเกอร์เคลื่อนไหวและ GIF ---------- */
+@keyframes stk-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-12%); } }
+@keyframes stk-wiggle { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-9deg); } 75% { transform: rotate(9deg); } }
+@keyframes stk-float { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-6%) rotate(2deg); } }
+@keyframes stk-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+@keyframes stk-spin { to { transform: rotate(360deg); } }
+@keyframes stk-shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-5%); } 40%, 80% { transform: translateX(5%); } }
+.stk.anim-bounce { animation: stk-bounce .9s ease-in-out infinite; }
+.stk.anim-wiggle { animation: stk-wiggle 1.1s ease-in-out infinite; }
+.stk.anim-float { animation: stk-float 2.4s ease-in-out infinite; }
+.stk.anim-pulse { animation: stk-pulse 1s ease-in-out infinite; }
+.stk.anim-spin > svg { animation: stk-spin 3s linear infinite; }
+.stk.anim-shake { animation: stk-shake .7s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .stk[class*="anim-"], .stk.anim-spin > svg { animation: none; } }
+.gif-stk { width: var(--s); height: var(--s); display: inline-grid; place-items: center; }
+.gif-stk img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+.gif-add { width: 64px; height: 64px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 1.5px dashed var(--line2); border-radius: var(--r); color: var(--tx2); }
+.gif-add small { font-size: 11px; }
+.stk-panel .gif-add { width: 72px; height: 72px; justify-self: center; }
+
+/* ---------- สีบับเบิลโน้ต ---------- */
+.note-colors { display: flex; gap: 10px; flex-wrap: wrap; }
+.note-colors button { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line2); }
+.note-colors button.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--tx); }
+.note-music { border: 1px solid var(--line); border-radius: var(--r); }
+
+/* ---------- ตัวเลือกเพลง ---------- */
+.mp { display: flex; flex-direction: column; gap: 10px; }
+.mp-s { background: var(--raised); border-radius: var(--r); display: flex; align-items: center; gap: 4px; padding-left: 10px; }
+.mp-list { max-height: 52vh; overflow-y: auto; }
+.mp-row { gap: 6px; }
+.mp-pick { flex: 1; display: flex; align-items: center; gap: 12px; text-align: left; color: var(--tx); min-width: 0; }
+.mp-pick .row-tx { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.mp-pick small { color: var(--tx3); }
+.mp-art { width: 44px; height: 44px; border-radius: 10px; flex: none; display: grid; place-items: center; color: #fff; background: hsl(var(--h) 45% 48%); }
+.ibtn.acc { color: var(--accent); }
+.ibtn.acc svg { fill: currentColor; }
+
+/* ---------- กล้องเต็มจอ ---------- */
+.cam { position: absolute; inset: 0; background: #000; color: #f3eee6; overflow: hidden; touch-action: none; user-select: none; }
+.cam-view { position: absolute; inset: 0 0 calc(132px + env(safe-area-inset-bottom)); border-radius: 0 0 22px 22px; overflow: hidden; background: #111; }
+.cam-view video { width: 100%; height: 100%; object-fit: cover; }
+.cam-view video.mirror { transform: scaleX(-1); }
+.cam-off { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; color: rgba(243, 238, 230, .75); }
+.cam-text { position: absolute; inset: 0; display: grid; place-items: center; padding: 64px 32px; }
+.cam-text textarea { width: 100%; background: transparent; border: 0; outline: 0; resize: none; text-align: center; font: 600 30px/1.35 inherit; font-family: inherit; min-height: 40%; }
+.cam-text textarea::placeholder { color: inherit; opacity: .6; }
+.cam-grid { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 3px; pointer-events: none; }
+.cam-grid span { border: 1px solid rgba(255, 255, 255, .35); overflow: hidden; }
+.cam-grid img { width: 100%; height: 100%; object-fit: cover; }
+.cam-flash { position: absolute; inset: 0; background: #fff; z-index: 5; }
+.cam-rec { position: absolute; top: calc(16px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; background: rgba(0, 0, 0, .5); padding: 4px 12px; border-radius: 14px; font-variant-numeric: tabular-nums; z-index: 4; }
+.cam-rec i { width: 8px; height: 8px; border-radius: 50%; background: #e03131; animation: stk-pulse 1s infinite; }
+.cam-top { position: absolute; top: env(safe-area-inset-top); left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; padding: 12px; z-index: 3; }
+.cam-top .cbtn { background: transparent; color: #fff; }
+.cam-top .cbtn.on { color: #f6d365; }
+.cam-fname { position: absolute; left: 50%; transform: translateX(-50%); font-size: 14px; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); }
+.cam-tools { position: absolute; left: 10px; top: 28%; display: flex; flex-direction: column; gap: 14px; z-index: 3; }
+.cam-tools button { display: flex; align-items: center; gap: 10px; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); }
+.cam-tools button b { font-size: 24px; width: 26px; text-align: center; }
+.cam-tools button span { font-size: 13px; opacity: 0; transition: opacity .2s; }
+.cam-tools button.on, .cam-tools button:hover { color: #f6d365; }
+.cam-tools button.on span, .cam-tools:hover button span { opacity: 1; }
+.cam-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; display: inline-block; }
+.cam-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding-bottom: env(safe-area-inset-bottom); z-index: 3; }
+.cam-ctl { position: absolute; left: 0; right: 0; bottom: calc(150px + env(safe-area-inset-bottom)); display: flex; align-items: center; justify-content: space-between; padding: 0 28px; }
+.cam-gal, .cam-ctl .cbtn { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; background: rgba(255, 255, 255, .15); color: #fff; }
+.cam-ctl .cbtn { border-radius: 50%; }
+.cam-shutter { width: 78px; height: 78px; border-radius: 50%; border: 5px solid #fff; background: rgba(255, 255, 255, .85); display: grid; place-items: center; color: #1f1b16; transition: transform .15s; }
+.cam-shutter:active { transform: scale(.94); }
+.cam-shutter.rec { background: #e03131; }
+.cam-shutter.recording { background: #e03131; transform: scale(1.12); border-color: rgba(255, 255, 255, .6); }
+.cam-modes { display: flex; justify-content: center; gap: 22px; padding: 18px 12px 6px; overflow-x: auto; }
+.cam-modes button { color: rgba(243, 238, 230, .55); font-size: 15px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
+.cam-modes button.on { color: #fff; }
+.cam-hint { text-align: center; font-size: 12px; color: rgba(243, 238, 230, .6); padding: 2px 16px 14px; margin: 0; }

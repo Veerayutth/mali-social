@@ -163,7 +163,8 @@
     else inner = `<div class="art${s.video || opts.motion ? ' kb' : ''}"${filt}>${M.scene(s.art?.kind, s.art?.seed)}</div>`;
     const ov = (s.overlays || []).map(o => o.type === 'text'
       ? `<span class="ov ov-text" style="left:${o.x}%;top:${o.y}%;color:${o.color || '#fff'}">${M.esc(o.text)}</span>`
-      : o.type === 'sticker' ? `<span class="ov ov-stk" style="left:${o.x}%;top:${o.y}%">${M.sticker(o.i, 64)}</span>`
+      : o.type === 'sticker' ? `<span class="ov ov-stk" style="left:${o.x}%;top:${o.y}%">${M.sticker(o.i, 64, o.a)}</span>`
+      : o.type === 'gif' ? `<span class="ov ov-stk" style="left:${o.x}%;top:${o.y}%">${M.gifHTML ? M.gifHTML(o.src, 72) : ''}</span>`
       : o.type === 'music' ? `<span class="ov ov-chip" style="left:${o.x}%;top:${o.y}%">${M.icon('music', 14)} ${M.esc(o.text)}</span>`
       : o.type === 'loc' ? `<span class="ov ov-chip" style="left:${o.x}%;top:${o.y}%">${M.icon('pin', 14)} ${M.esc(o.text)}</span>` : '').join('');
     return inner + ov;

@@ -42,8 +42,8 @@
     const reqN = st.chats.filter(c => c.request).length;
     const notes = Object.entries(st.notes).filter(([uid, n]) => Date.now() - n.ts < M.T.DAY && !st.blocked.includes(uid));
     return `<div class="notes hscroll">
-        <button class="note-it" data-act="editNote">${st.me.note ? `<span class="note-bub">${esc(st.me.note.text || '♪')}</span>` : '<span class="note-bub add">โน้ตของคุณ</span>'}${M.avatar(st.me, 60)}<span>โน้ตของคุณ</span></button>
-        ${notes.map(([uid, n]) => `<button class="note-it" data-act="viewNote" data-id="${uid}"><span class="note-bub">${n.music ? I('music', 12) + ' ' + esc(M.TRACKS.find(t => t.id === n.music)?.name || '') : esc(n.text)}</span>${M.avatar(M.user(uid), 60)}<span>${esc(M.user(uid).name.split(' ')[0])}</span></button>`).join('')}
+        <button class="note-it" data-act="editNote">${st.me.note ? `<span class="note-bub"${M.noteStyle(st.me.note)}>${esc(st.me.note.text || '♪')}</span>` : '<span class="note-bub add">โน้ตของคุณ</span>'}${M.avatar(st.me, 60)}<span>โน้ตของคุณ</span></button>
+        ${notes.map(([uid, n]) => `<button class="note-it" data-act="viewNote" data-id="${uid}"><span class="note-bub"${M.noteStyle(n)}>${n.music ? I('music', 12) + ' ' + esc(M.TRACKS.find(t => t.id === n.music)?.name || '') : esc(n.text)}</span>${M.avatar(M.user(uid), 60)}<span>${esc(M.user(uid).name.split(' ')[0])}</span></button>`).join('')}
       </div>
       <div class="pad"><input class="field" placeholder="ค้นหา" value="${esc(st.chatQ || '')}" data-chatq aria-label="ค้นหาแชต"></div>
       <div class="chips hscroll pad">${FILTERS.map(([k, l]) => `<button class="chip${f === k ? ' on' : ''}" data-act="chatFilter" data-k="${k}">${l}${k === 'request' && reqN ? ` ${reqN}` : ''}</button>`).join('')}</div>
@@ -138,7 +138,7 @@
     const text = c.secret ? (M.mem.plain[m.id] ?? '…กำลังถอดรหัส') : m.text;
     let body;
     switch (m.type) {
-      case 'sticker': body = `<div class="msg-stk">${M.sticker(m.sticker, 120)}</div>`; break;
+      case 'sticker': body = `<div class="msg-stk">${m.gif ? M.gifHTML(m.gif, 140) : M.sticker(m.sticker, 120, m.anim)}</div>`; break;
       case 'image': body = `<button class="msg-img${m.sensitive && !m.revealed && M.st.settings.nudityProtect ? ' blur' : ''}" data-act="viewImage" data-c="${c.id}" data-m="${m.id}">${M.media(m)}${m.sensitive && !m.revealed && M.st.settings.nudityProtect ? `<span class="blur-note">${I('eyeOff', 22)}<b>รูปนี้อาจมีเนื้อหาไม่เหมาะสม</b><small>ระบบเบลอให้อัตโนมัติ แตะเพื่อเลือกว่าจะดูไหม</small></span>` : ''}</button>`; break;
       case 'post': case 'reel': {
         const p = m.type === 'reel' ? M.st.reels.find(r => r.id === m.postId) : M.findPost(m.postId);
@@ -162,7 +162,8 @@
     const st = M.st;
     if (c.request) return `<div class="req-bar"><p class="muted small">${esc(M.user(c.members[0]).handle)} ต้องการส่งข้อความถึงคุณ เขาจะไม่รู้ว่าคุณเห็นข้อความจนกว่าคุณจะยอมรับ</p><div class="dlg-a"><button class="btn sec" data-act="reqDecide" data-id="${c.id}" data-v="block">บล็อก</button><button class="btn sec" data-act="reqDecide" data-id="${c.id}" data-v="del">ลบ</button><button class="btn pri" data-act="reqDecide" data-id="${c.id}" data-v="ok">ยอมรับ</button></div></div>`;
     if (c.type === 'broadcast' && c.owner !== 'me') return `<div class="req-bar"><p class="muted small center">ช่องนี้ส่งข้อความได้เฉพาะผู้สร้าง คุณกดถูกใจข้อความได้</p></div>`;
-    return `<div class="stk-panel" hidden>${M.STICKERS.map((_, i) => `<button data-stk="${i}" aria-label="${M.STICKERS[i].t}">${M.sticker(i, 72)}</button>`).join('')}</div>
+    return `<div class="stk-panel" hidden>${M.ANIM_STICKERS.map(([i, a]) => `<button data-stk="${i}" data-a="${a}" aria-label="${M.STICKERS[i].t} (${M.ANIMS[a]})">${M.sticker(i, 72, a)}</button>`).join('')}${M.STICKERS.map((_, i) => `<button data-stk="${i}" aria-label="${M.STICKERS[i].t}">${M.sticker(i, 72)}</button>`).join('')}
+      <button class="gif-add" data-gifup aria-label="เพิ่ม GIF จากเครื่อง">${I('plus', 22)}<small>GIF</small></button>${(M.st.myGifs || []).map((g, i) => `<button data-gif="${i}" aria-label="GIF ${i + 1}">${M.gifHTML(g, 72)}</button>`).join('')}</div>
       <form class="composer chat-comp" data-comp>
         <button type="button" class="ibtn" data-act="attach" data-id="${c.id}" aria-label="แนบไฟล์">${I('plus')}</button>
         <input class="field" name="t" placeholder="${c.secret ? 'ข้อความเข้ารหัส' : 'ข้อความ'}" autocomplete="off" maxlength="1000" aria-label="พิมพ์ข้อความ">
@@ -225,7 +226,13 @@
     if (!f) return;
     const panel = el.querySelector('.stk-panel');
     el.querySelector('[data-stkbtn]').onclick = () => { panel.hidden = !panel.hidden; };
-    panel.onclick = e => { const b = e.target.closest('[data-stk]'); if (!b) return; sendMsg(c, { type: 'sticker', sticker: +b.dataset.stk }); panel.hidden = true; };
+    panel.onclick = async e => {
+      const b = e.target.closest('[data-stk],[data-gif],[data-gifup]'); if (!b) return;
+      if (b.dataset.stk) sendMsg(c, { type: 'sticker', sticker: +b.dataset.stk, anim: b.dataset.a || undefined });
+      else if (b.dataset.gif) sendMsg(c, { type: 'sticker', gif: M.st.myGifs[+b.dataset.gif] });
+      else { const g = await M.addMyGif(); if (!g) return; sendMsg(c, { type: 'sticker', gif: g }); }
+      panel.hidden = true;
+    };
     f.onsubmit = async e => {
       e.preventDefault();
       let t = f.t.value.trim(); if (!t) return;
