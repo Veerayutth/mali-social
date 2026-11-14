@@ -1,0 +1,6 @@
+[Unit]
+Description=Mali health check (restart if unhealthy)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'curl -fsS --max-time 10 http://127.0.0.1:8787/api/health >/dev/null || (echo "health check failed, restarting"; systemctl restart mali)'

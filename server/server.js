@@ -139,10 +139,17 @@ const cookies = req => Object.fromEntries((req.headers.cookie || '').split(';').
 // IP จริงของผู้ใช้: ถ้าคำขอมาจากเครื่องนี้ (เช่น ผ่าน Cloudflare Tunnel) ใช้เฮดเดอร์ที่ Cloudflare ใส่มา
 // เชื่อเฮดเดอร์เฉพาะเมื่อมาจาก loopback เพราะคนภายนอกปลอมเฮดเดอร์นี้ได้ถ้าต่อตรง
 const isLoopback = a => a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+// PROXY บอกว่าอยู่หลังอะไร เพื่อเลือกเฮดเดอร์ที่เชื่อถือได้ (เชื่อเฉพาะเมื่อคำขอมาจากเครื่องนี้):
+//   caddy      → X-Forwarded-For ตัวสุดท้าย (Caddy ใส่ IP จริงเอง)
+//   cloudflare → CF-Connecting-IP (Cloudflare Tunnel หรือ Cloudflare proxy)
+const PROXY = process.env.PROXY || 'cloudflare';
+const ipOk = s => typeof s === 'string' && /^[0-9a-fA-F:.]{3,45}$/.test(s);
 const clientIp = req => {
   const a = req.socket.remoteAddress || '?';
+  if (!isLoopback(a)) return a;
+  if (PROXY === 'caddy') { const x = String(req.headers['x-forwarded-for'] || '').split(',').pop().trim(); return ipOk(x) ? x : a; }
   const cf = req.headers['cf-connecting-ip'];
-  return isLoopback(a) && typeof cf === 'string' && /^[0-9a-fA-F:.]{3,45}$/.test(cf) ? cf : a;
+  return ipOk(cf) ? cf : a;
 };
 const viaHttps = req => FORCE_SECURE || (isLoopback(req.socket.remoteAddress) && req.headers['x-forwarded-proto'] === 'https');
 const str = (v, max, field) => {

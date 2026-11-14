@@ -1,0 +1,8 @@
+[Unit]
+Description=Mali daily backup
+
+[Service]
+Type=oneshot
+User=mali
+EnvironmentFile=/etc/mali/mali.env
+ExecStart=/bin/bash /opt/mali/deploy/backup.sh

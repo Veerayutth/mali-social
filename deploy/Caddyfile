@@ -1,0 +1,20 @@
+{
+	email __EMAIL__
+}
+
+__DOMAIN__ {
+	encode zstd gzip
+	# ลบเฮดเดอร์ที่ใช้ระบุ IP ซึ่งผู้ใช้ปลอมได้ แล้วให้ Caddy ใส่ X-Forwarded-For ที่ถูกต้องเอง
+	request_header -CF-Connecting-IP
+	request_header -X-Real-IP
+	reverse_proxy 127.0.0.1:8787 {
+		flush_interval -1
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+	request_body {
+		max_size 64MB
+	}
+}
