@@ -1018,3 +1018,5 @@ small.strong { color: var(--tx); font-weight: 600; }
 .ep-row { border: 1px solid var(--line); border-radius: var(--r); padding: 8px 12px; }
 .ep-row .row-tx { display: flex; flex-direction: column; text-align: left; }
 .ep-row small { color: var(--tx3); }
+.sec-warn { background: color-mix(in srgb, var(--accent) 10%, var(--bg)); border-radius: var(--r); margin: 8px 16px; }
+.sec-warn p { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; color: var(--accent); font-size: 14px; }

@@ -54,7 +54,8 @@
     like: d => M.toast(`${d.user.name} ถูกใจโพสต์ของคุณ`),
     comment: d => M.toast(`${d.user.name} แสดงความคิดเห็น: ${d.text}`),
     follow: d => M.toast(`${d.user.name} เริ่มติดตามคุณ`),
-    post: () => { C.feed = null; if (topOf('online') && C.tab === 'feed') loadFeed(); }
+    post: () => { C.feed = null; if (topOf('online') && C.tab === 'feed') loadFeed(); },
+    security: d => M.toast(d.text, { ms: 6000, action: 'ตรวจสอบ', onAction: () => M.push('onlineSecurity', {}) })
   };
   C.connect = () => {
     if (C.es || C.polling || !C.me) return;
@@ -105,7 +106,7 @@
     : `<img class="${cls}" src="${esc(m.url || m)}" alt="" loading="lazy">`;
   const postCard = p => `<article class="on-post" data-pid="${p.id}">
       <header class="on-ph"><button class="on-u" data-act="onUser" data-h="${esc(p.user.handle)}">${av(p.user, 36)}<span translate="no"><b>${esc(p.user.name)}</b><small>@${esc(p.user.handle)} · ${M.ago(p.created)}</small></span></button>
-        ${p.user.id === C.me.id ? `<button class="ibtn sm" data-act="onPostMenu" data-id="${p.id}" aria-label="ตัวเลือก">${I('more', 20)}</button>` : ''}</header>
+        <button class="ibtn sm" data-act="${p.user.id === C.me.id ? 'onPostMenu' : 'onReport'}" data-kind="post" data-id="${p.id}" aria-label="ตัวเลือก">${I('more', 20)}</button></header>
       ${p.media.length ? `<div class="on-media${p.media.length > 1 ? ' multi' : ''}">${p.media.map(u => media(u)).join('')}</div>` : ''}
       ${p.caption ? `<p class="on-cap" translate="no">${esc(p.caption)}</p>` : ''}
       <footer class="on-acts"><button class="on-act${p.liked ? ' on' : ''}" data-act="onLike" data-id="${p.id}" aria-pressed="${p.liked}" aria-label="ถูกใจ">${I('heart', 22)}<span>${p.likes || ''}</span></button>
@@ -153,6 +154,7 @@
             <button class="row" data-act="openChangeHandle" data-online="1"><span class="row-ic">${I('type', 22)}</span><span class="row-tx"><span>เปลี่ยนชื่อผู้ใช้</span><small translate="no">@${esc(C.me.handle)}</small></span></button>
             <button class="row" data-act="onEdit" data-k="name"><span class="row-ic">${I('edit', 22)}</span><span class="row-tx"><span>แก้ไขชื่อ</span></span></button>
             <button class="row" data-act="onEdit" data-k="bio"><span class="row-ic">${I('type', 22)}</span><span class="row-tx"><span>แก้ไข Bio</span></span></button>
+            <button class="row" data-act="page" data-page="onlineSecurity" data-params="{}"><span class="row-ic">${I('shieldCheck', 22)}</span><span class="row-tx"><span>ความปลอดภัยของบัญชี</span><small>อุปกรณ์ที่เข้าสู่ระบบ แอปที่เชื่อมต่อ และประวัติการเข้าถึงข้อมูล</small></span></button>
             <button class="row" data-act="onLogoutAll"><span class="row-ic">${I('device', 22)}</span><span class="row-tx"><span>ออกจากระบบทุกอุปกรณ์</span></span></button>
             <button class="row" data-act="onLogout"><span class="row-ic">${I('logout', 22)}</span><span class="row-tx"><span>ออกจากระบบ</span></span></button></div>
           <p class="note pad">บัญชีนี้อยู่บนเซิร์ฟเวอร์ที่คุณรันเอง แยกจากข้อมูลตัวอย่างในแอป</p>`;
@@ -337,7 +339,7 @@
       return M.bar(`<span translate="no">@${esc(d.user.handle)}</span>`) + `<div class="scroll"><div class="col">
         <div class="on-me pad">${av(d.user, 88)}<h2 translate="no">${esc(d.user.name)}</h2>${d.user.bio ? `<p translate="no">${esc(d.user.bio)}</p>` : ''}
           <div class="on-stats"><span><b>${d.posts.length}</b> โพสต์</span><button data-act="onFollows" data-h="${esc(d.user.handle)}" data-k="followers"><b>${d.followers}</b> ผู้ติดตาม</button><button data-act="onFollows" data-h="${esc(d.user.handle)}" data-k="following"><b>${d.following}</b> กำลังติดตาม</button></div>
-          ${mine ? '' : `<div class="p2p-row"><button class="btn ${d.isFollowing ? 'sec' : 'pri'}" data-act="onFollow">${d.isFollowing ? 'กำลังติดตาม' : d.followsMe ? 'ติดตามกลับ' : 'ติดตาม'}</button><button class="btn sec" data-act="onChat" data-h="${esc(d.user.handle)}">ส่งข้อความ</button></div>`}</div>
+          ${mine ? '' : `<div class="p2p-row"><button class="ibtn" data-act="onReport" data-kind="user" data-id="${esc(d.user.handle)}" aria-label="รายงานบัญชีนี้">${I('flag', 20)}</button><button class="btn ${d.isFollowing ? 'sec' : 'pri'}" data-act="onFollow">${d.isFollowing ? 'กำลังติดตาม' : d.followsMe ? 'ติดตามกลับ' : 'ติดตาม'}</button><button class="btn sec" data-act="onChat" data-h="${esc(d.user.handle)}">ส่งข้อความ</button></div>`}</div>
         ${d.posts.length ? d.posts.map(postCard).join('') : '<p class="empty">ยังไม่มีโพสต์</p>'}</div></div>`;
     },
     mount(el, p) {
@@ -348,6 +350,44 @@
     const pg = topOf('onlineUser'), d = pg?._params.data; if (!d) return;
     try { const r = await C.api('POST', `/users/${encodeURIComponent(d.user.handle)}/follow`); d.isFollowing = r.following; d.followers += r.following ? 1 : -1; C.feed = null; M.renderPage(pg); } catch (e) { fail(e); }
   };
+
+  /* รายงานเนื้อหา */
+  const REASONS = [['spam', 'สแปม'], ['scam', 'หลอกลวงหรือฉ้อโกง'], ['harassment', 'กลั่นแกล้งหรือคุกคาม'], ['nudity', 'ภาพโป๊หรือเนื้อหาทางเพศ'], ['violence', 'ความรุนแรง'], ['impersonation', 'แอบอ้างเป็นคนอื่น'], ['self_harm', 'ทำร้ายตัวเอง'], ['other', 'อื่นๆ']];
+  A.onReport = el => {
+    const kind = el.dataset.kind, target = el.dataset.id;
+    M.menu(REASONS.map(([k, l]) => ({ label: l, act: async () => {
+      const note = k === 'other' ? await M.prompt('รายละเอียด', '', 'เล่าสั้นๆ ว่าเกิดอะไรขึ้น', { max: 500, ok: 'ส่งรายงาน' }) : '';
+      if (note === null) return;
+      try { await C.api('POST', '/report', { kind, target, reason: k, note }); M.toast('ส่งรายงานแล้ว ทีมดูแลจะตรวจสอบ และจะไม่บอกเจ้าของเนื้อหาว่าใครรายงาน', { ms: 4000 }); } catch (e) { fail(e); }
+    } })), kind === 'user' ? 'รายงานบัญชีนี้เพราะ' : 'รายงานโพสต์นี้เพราะ');
+  };
+
+  /* ความปลอดภัยของบัญชี */
+  const EV = { login: 'เข้าสู่ระบบ', new_device_login: 'เข้าสู่ระบบจากอุปกรณ์ใหม่', token_device_mismatch: 'มีการใช้โทเค็นจากอุปกรณ์อื่น ระบบยกเลิกให้แล้ว', account_locked: 'ใส่รหัสผิดหลายครั้ง บัญชีถูกล็อก 15 นาที', mass_follow: 'ติดตามจำนวนมากผิดปกติ', spam_suspected: 'ส่งข้อความหาคนแปลกหน้าจำนวนมาก' };
+  const RK = { follow: 'จำกัดการติดตาม', dm_strangers: 'จำกัดการส่งข้อความหาคนที่ไม่ได้ติดตามคุณ' };
+  const when = ts => new Date(ts).toLocaleString(M.locale(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  M.Pages.onlineSecurity = {
+    render(p) {
+      const d = p.d;
+      if (!d) return M.bar('ความปลอดภัยของบัญชี') + `<div class="scroll">${loading}</div>`;
+      return M.bar('ความปลอดภัยของบัญชี') + `<div class="scroll"><div class="col">
+        ${d.ev.restrictions.length ? `<div class="sec-warn pad">${d.ev.restrictions.map(r => `<p>${I('alert', 18)} ${esc(RK[r.kind] || r.kind)} ถึง ${when(r.until)} — ${esc(r.reason || '')}</p>`).join('')}</div>` : ''}
+        <h3 class="sec-t pad">อุปกรณ์ที่เข้าสู่ระบบ</h3><div class="rows">${d.s.sessions.map(s => `<div class="row">${'<span class="row-ic">' + I(/iOS|Android/.test(s.device) ? 'device' : 'laptop', 22) + '</span>'}<span class="row-tx"><span>${esc(s.device)}${s.current ? ' · <b class="acc">เครื่องนี้</b>' : ''}</span><small>${esc(s.ip)}${s.country ? ' · ' + esc(s.country) : ''} · ใช้งานล่าสุด ${M.ago(s.lastSeen)}</small></span>${s.current ? '' : `<button class="btn sm sec" data-act="onRevokeSession" data-id="${esc(s.id)}">ออกจากระบบ</button>`}</div>`).join('')}</div>
+        <p class="note pad">โทเค็นเข้าสู่ระบบผูกกับอุปกรณ์ หมุนใหม่ทุก 24 ชั่วโมง และหมดอายุเมื่อไม่ได้ใช้ 14 วัน ถ้ามีคนนำไปใช้บนอุปกรณ์อื่น ระบบจะยกเลิกทันที</p>
+        <h3 class="sec-t pad">แอปที่เชื่อมต่อ</h3><div class="rows">${d.g.grants.length ? d.g.grants.map(g => `<div class="row"><span class="row-ic">${I('apps', 22)}</span><span class="row-tx"><span>${esc(g.name)}</span><small>สิทธิ์: ${esc(g.scope)}</small></span><button class="btn sm sec" data-act="onRevokeApp" data-id="${esc(g.client_id)}">ยกเลิก</button></div>`).join('') : '<p class="muted pad">ยังไม่มีแอปที่เชื่อมต่อ</p>'}</div>
+        <h3 class="sec-t pad">ใครเข้าถึงข้อมูลของคุณ</h3><div class="rows">${d.a.access.length ? d.a.access.slice(0, 30).map(x => `<div class="row tight"><span class="row-tx"><span>${esc(x.by)}</span><small>${esc(x.action)} · ${when(x.ts)}</small></span></div>`).join('') : '<p class="muted pad">ยังไม่มีเจ้าหน้าที่หรือแอปใดเข้าถึงข้อมูลของคุณ</p>'}</div>
+        <h3 class="sec-t pad">กิจกรรมล่าสุด</h3><div class="rows">${d.ev.events.slice(0, 20).map(e => `<div class="row tight"><span class="row-ic ${e.severity === 'high' ? 'warn' : ''}">${I(e.severity === 'high' ? 'alert' : 'shieldCheck', 20)}</span><span class="row-tx"><span>${esc(EV[e.type] || e.type)}</span><small>${esc(e.detail?.device || '')}${e.detail?.country ? ' · ' + esc(e.detail.country) : ''} · ${when(e.ts)}</small></span></div>`).join('')}</div>
+        <p class="note pad">ข้อความแชตและไฟล์ที่อัปโหลดถูกเข้ารหัสบนเซิร์ฟเวอร์ด้วย AES-256-GCM กุญแจเก็บแยกจากฐานข้อมูล</p></div></div>`;
+    },
+    mount(el, p) {
+      if (p.d) return;
+      Promise.all(['/security/sessions', '/security/events', '/oauth/grants', '/security/access'].map(u => C.api('GET', u)))
+        .then(([s, ev, g, a]) => { p.d = { s, ev, g, a }; M.renderPage(el); }).catch(e => { fail(e); M.back(); });
+    }
+  };
+  const reloadSec = () => { const pg = topOf('onlineSecurity'); if (pg) { pg._params.d = null; M.renderPage(pg); } };
+  A.onRevokeSession = async el => { if (!(await M.confirm('ออกจากระบบอุปกรณ์นี้ไหม', '', 'ออกจากระบบ', true))) return; try { await C.api('DELETE', '/security/sessions/' + encodeURIComponent(el.dataset.id)); M.toast('ออกจากระบบอุปกรณ์นั้นแล้ว'); reloadSec(); } catch (e) { fail(e); } };
+  A.onRevokeApp = async el => { if (!(await M.confirm('ยกเลิกการเชื่อมต่อแอปนี้ไหม', 'แอปจะเข้าถึงบัญชีของคุณไม่ได้อีก', 'ยกเลิก', true))) return; try { await C.api('DELETE', '/oauth/grants/' + encodeURIComponent(el.dataset.id)); reloadSec(); } catch (e) { fail(e); } };
 
   /* ผู้ติดตาม / กำลังติดตาม / แนะนำ */
   A.onFollows = el => M.push('onlineFollows', { handle: el.dataset.h, tab: el.dataset.k || 'followers', sort: 'new', q: '' });

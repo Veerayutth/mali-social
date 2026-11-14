@@ -13,6 +13,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
+const kms = require('./kms');
+const PROD = process.env.NODE_ENV === 'production';
 
 const PORT = +process.env.PORT || 8787;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -57,6 +59,18 @@ db.exec(`
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, old TEXT NOT NULL COLLATE NOCASE, new TEXT NOT NULL COLLATE NOCASE, ts INTEGER NOT NULL);
   CREATE INDEX IF NOT EXISTS handle_changes_old ON handle_changes(old, ts);
 `);
+// เพิ่มคอลัมน์ใหม่ให้ฐานข้อมูลเดิม (ย้ายข้อมูลแบบไม่ทำลาย)
+for (const sql of [
+  "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+  'ALTER TABLE users ADD COLUMN suspended_until INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE sessions ADD COLUMN sid TEXT', 'ALTER TABLE sessions ADD COLUMN device_fp TEXT', 'ALTER TABLE sessions ADD COLUMN device_label TEXT',
+  'ALTER TABLE sessions ADD COLUMN ip TEXT', 'ALTER TABLE sessions ADD COLUMN country TEXT', 'ALTER TABLE sessions ADD COLUMN last_seen INTEGER',
+  'ALTER TABLE sessions ADD COLUMN rotated_at INTEGER', 'ALTER TABLE sessions ADD COLUMN replaced INTEGER NOT NULL DEFAULT 0'
+]) { try { db.exec(sql); } catch {} }
+db.exec(`CREATE TABLE IF NOT EXISTS reports (
+  id TEXT PRIMARY KEY, reporter TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, target_user TEXT, reason TEXT NOT NULL,
+  note TEXT, created INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'open', handled_by TEXT, handled_at INTEGER);`);
+const G = require('./guard')(db);
 const q = sql => db.prepare(sql);
 const now = () => Date.now();
 const newId = (p = '') => p + crypto.randomBytes(9).toString('base64url');
@@ -88,6 +102,11 @@ setInterval(() => { const t = now(); for (const [k, b] of buckets) if (!b.length
 class HttpError extends Error { constructor(status, msg, extra) { super(msg); this.status = status; this.extra = extra; } }
 const fail = (status, msg, extra) => { throw new HttpError(status, msg, extra); };
 
+// นโยบายความปลอดภัยของเนื้อหา: อนุญาตเฉพาะแหล่งที่แอปใช้จริง
+const CSP = ["default-src 'self'", "script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data: blob:", "media-src 'self' blob: data:", "worker-src 'self' blob:",
+  "connect-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com https://0.peerjs.com wss://0.peerjs.com",
+  "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'", "object-src 'none'"].join('; ');
 const SEC_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
@@ -140,7 +159,7 @@ const SESSION_DAYS = 30;
 const MAX_ACCOUNTS = 5;
 const cookieOpts = (req, maxAge) => `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${viaHttps(req) ? '; Secure' : ''}`;
 const addCookie = (res, c) => { const prev = res.getHeader('Set-Cookie') || []; res.setHeader('Set-Cookie', [...(Array.isArray(prev) ? prev : [prev]), c]); };
-const sessionUser = token => token ? q('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ?').get(sha256(token), now()) || null : null;
+const sessionUser = token => token ? q('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ? AND u.suspended_until <= ?').get(sha256(token), now(), now()) || null : null;
 // บัญชีที่เข้าสู่ระบบไว้ในเครื่องนี้ (ตรวจโทเค็นทุกตัว)
 function deviceAccounts(req) {
   const c = cookies(req), out = [];
@@ -151,19 +170,61 @@ function deviceAccounts(req) {
   }
   return out;
 }
+const SESSION_IDLE_MS = 14 * 864e5, ROTATE_MS = 864e5, ROTATE_GRACE_MS = 60e3;
 function createSession(res, userId, req) {
   const others = deviceAccounts(req).filter(a => a.user.id !== userId);
   if (others.length >= MAX_ACCOUNTS) fail(400, `เพิ่มบัญชีในเครื่องนี้ได้สูงสุด ${MAX_ACCOUNTS} บัญชี`);
-  const token = crypto.randomBytes(32).toString('base64url');
-  q('INSERT INTO sessions (token, user_id, created, expires, ua) VALUES (?,?,?,?,?)').run(sha256(token), userId, now(), now() + SESSION_DAYS * 864e5, String(req.headers['user-agent'] || '').slice(0, 200));
+  const token = crypto.randomBytes(32).toString('base64url'), dev = G.deviceOf(req), ip = clientIp(req), country = G.countryOf(req);
+  // อุปกรณ์หรือประเทศใหม่ → บันทึกเหตุการณ์และแจ้งเจ้าของบัญชี
+  const seenDev = q('SELECT 1 FROM sessions WHERE user_id = ? AND device_fp = ?').get(userId, dev.fp) || q("SELECT 1 FROM security_events WHERE user_id = ? AND type = 'login' AND detail LIKE ?").get(userId, `%${dev.fp}%`);
+  const lastCountry = q("SELECT country FROM sessions WHERE user_id = ? AND country IS NOT NULL ORDER BY created DESC LIMIT 1").get(userId)?.country;
+  q('INSERT INTO sessions (token, user_id, created, expires, ua, sid, device_fp, device_label, ip, country, last_seen, rotated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(sha256(token), userId, now(), now() + SESSION_DAYS * 864e5, String(req.headers['user-agent'] || '').slice(0, 200), newId('s_'), dev.fp, dev.label, ip, country, now(), now());
+  G.event('login', { userId, ip, detail: { device: dev.label, fp: dev.fp, country } });
+  G.audit({ actorType: 'user', actorId: userId, action: 'login', target: userId, ip, detail: { device: dev.label } });
+  const unusual = (!seenDev && q('SELECT COUNT(*) n FROM sessions WHERE user_id = ?').get(userId).n > 1) || (country && lastCountry && country !== lastCountry);
+  if (unusual) {
+    G.event('new_device_login', { userId, ip, severity: country && lastCountry && country !== lastCountry ? 'high' : 'info', detail: { device: dev.label, country } });
+    setTimeout(() => emit(userId, 'security', { text: `เข้าสู่ระบบจากอุปกรณ์ใหม่: ${dev.label}${country ? ' (' + country + ')' : ''}` }), 50);
+  }
   addCookie(res, `mali_s_${userId}=${token}; ${cookieOpts(req, SESSION_DAYS * 86400)}`);
   addCookie(res, `mali_a=${userId}; ${cookieOpts(req, SESSION_DAYS * 86400)}`);
   if (cookies(req).mali_sid) addCookie(res, `mali_sid=; ${cookieOpts(req, 0)}`); // คุกกี้แบบเก่า
 }
+// ตรวจ session: หมดอายุ / ไม่ได้ใช้นานเกิน / ใช้จากอุปกรณ์อื่น (สงสัยโทเค็นถูกขโมย) / บัญชีถูกระงับ
+function checkSession(req, token, cookieName) {
+  if (!token) return null;
+  const s = q('SELECT * FROM sessions WHERE token = ? AND expires > ?').get(sha256(token), now());
+  if (!s) return null;
+  if (s.last_seen && now() - s.last_seen > SESSION_IDLE_MS) { q('DELETE FROM sessions WHERE token = ?').run(s.token); return null; }
+  const dev = G.deviceOf(req);
+  if (s.device_fp && s.device_fp !== dev.fp) {
+    q('DELETE FROM sessions WHERE token = ?').run(s.token);
+    G.event('token_device_mismatch', { userId: s.user_id, ip: clientIp(req), severity: 'high', detail: { expected: s.device_label, got: dev.label } });
+    G.audit({ actorType: 'system', action: 'revoke_session_device_mismatch', target: s.user_id, ip: clientIp(req) });
+    return null;
+  }
+  const u = q('SELECT * FROM users WHERE id = ?').get(s.user_id);
+  if (!u || u.suspended_until > now()) return null;
+  if (!s.last_seen || now() - s.last_seen > 60e3) q('UPDATE sessions SET last_seen = ?, ip = ? WHERE token = ?').run(now(), clientIp(req), s.token);
+  // หมุนโทเค็นทุก 24 ชม.: ออกโทเค็นใหม่ โทเค็นเดิมใช้ได้อีก 60 วินาทีสำหรับคำขอที่กำลังวิ่งอยู่
+  const res = req._res;
+  if (res && cookieName && !s.replaced && now() - (s.rotated_at || s.created) > ROTATE_MS) {
+    const nt = crypto.randomBytes(32).toString('base64url');
+    q('INSERT INTO sessions (token, user_id, created, expires, ua, sid, device_fp, device_label, ip, country, last_seen, rotated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(sha256(nt), s.user_id, s.created, s.expires, s.ua, s.sid, s.device_fp, s.device_label, clientIp(req), s.country, now(), now());
+    q('UPDATE sessions SET expires = ?, replaced = 1 WHERE token = ?').run(now() + ROTATE_GRACE_MS, s.token);
+    addCookie(res, `${cookieName}=${nt}; ${cookieOpts(req, Math.max(1, Math.floor((s.expires - now()) / 1000)))}`);
+  }
+  return u;
+}
 function currentUser(req) {
+  if (req._user !== undefined) return req._user;
   const c = cookies(req);
-  if (c.mali_a && /^[\w-]+$/.test(c.mali_a)) { const u = sessionUser(c['mali_s_' + c.mali_a]); if (u && u.id === c.mali_a) return u; }
-  return sessionUser(c.mali_sid);
+  let u = null;
+  if (c.mali_a && /^[\w-]+$/.test(c.mali_a)) { const x = checkSession(req, c['mali_s_' + c.mali_a], 'mali_s_' + c.mali_a); if (x && x.id === c.mali_a) u = x; }
+  if (!u) u = checkSession(req, c.mali_sid, 'mali_sid');
+  return (req._user = u);
 }
 const needUser = req => currentUser(req) || fail(401, 'กรุณาเข้าสู่ระบบ');
 
@@ -182,7 +243,8 @@ function postOut(p, meId) {
     comments: q('SELECT COUNT(*) n FROM comments WHERE post_id = ?').get(p.id).n
   };
 }
-const msgOut = m => ({ id: m.id, from: m.from_id, to: m.to_id, text: m.text, media: m.media ? JSON.parse(m.media) : null, created: m.created, read: !!m.read_at });
+// ข้อความแชตเก็บแบบเข้ารหัส (kms.seal) และถอดรหัสตอนส่งให้ผู้ใช้ที่มีสิทธิ์
+const msgOut = m => { const media = kms.open(m.media); return { id: m.id, from: m.from_id, to: m.to_id, text: kms.open(m.text) || '', media: media ? JSON.parse(media) : null, created: m.created, read: !!m.read_at }; };
 const pairOf = (a, b) => [a, b].sort().join('|');
 
 /* ---------------- เรียลไทม์ (SSE) ---------------- */
@@ -215,12 +277,17 @@ const MEDIA_TYPES = {
 };
 const MIME_BY_EXT = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', json: 'application/json', webmanifest: 'application/manifest+json', png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml', mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', md: 'text/plain; charset=utf-8' };
 const mediaUrlOk = u => typeof u === 'string' && /^\/media\/[A-Za-z0-9_-]{12,40}\.(jpg|png|webp|gif|mp4|mov|webm)$/.test(u) && fs.existsSync(path.join(MEDIA, path.basename(u)));
+const SECURITY_TXT = `Contact: ${process.env.SECURITY_CONTACT || 'mailto:security@mali.example'}
+Expires: ${new Date(Date.now() + 300 * 864e5).toISOString()}
+Preferred-Languages: th, en
+Policy: ${process.env.PUBLIC_URL || ''}/security-policy
+`;
 
 /* ---------------- เส้นทาง API ---------------- */
 const routes = [];
-const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
+const route = (method, pattern, fn) => routes.push({ method, pattern, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
 
-route('GET', '/api/health', () => ({ ok: true, app: 'mali', version: 1 }));
+route('GET', '/api/health', () => { q('SELECT 1').get(); return { ok: true, app: 'mali', version: 2 }; });
 
 route('POST', '/api/auth/signup', async (req, res) => {
   const ip = clientIp(req), w = limited('signup:' + ip, 20, 3600e3);
@@ -235,6 +302,7 @@ route('POST', '/api/auth/signup', async (req, res) => {
   if (q('SELECT 1 FROM users WHERE handle = ?').get(handle) || handleReservedFor(handle)) fail(409, 'ชื่อผู้ใช้นี้มีคนใช้แล้ว');
   const id = newId('u_');
   q('INSERT INTO users (id, handle, name, pw, created, hue) VALUES (?,?,?,?,?,?)').run(id, handle, name, await hashPw(pw), now(), crypto.randomInt(0, 360));
+  G.audit({ actorType: 'user', actorId: id, action: 'signup', target: id, ip });
   createSession(res, id, req);
   return { user: pubUser(q('SELECT * FROM users WHERE id = ?').get(id)) };
 });
@@ -243,6 +311,8 @@ route('POST', '/api/auth/login', async (req, res) => {
   const ip = clientIp(req);
   const w = limited('login:' + ip, 10, 900e3);
   if (w) fail(429, `ลองเข้าสู่ระบบบ่อยเกินไป รออีก ${w} วินาที`);
+  const blk = G.restricted(ip, 'login');
+  if (blk) fail(429, `เครือข่ายนี้ถูกระงับการเข้าสู่ระบบชั่วคราว ลองใหม่ใน ${Math.ceil((blk.until - now()) / 60000)} นาที`);
   const b = await readJson(req);
   const handle = str(b.handle || '', 30, 'ชื่อผู้ใช้').toLowerCase();
   const pw = typeof b.password === 'string' ? b.password.slice(0, 128) : '';
@@ -250,9 +320,11 @@ route('POST', '/api/auth/login', async (req, res) => {
   if (u && u.locked_until > now()) fail(429, `บัญชีถูกล็อกชั่วคราว ลองใหม่ใน ${Math.ceil((u.locked_until - now()) / 60000)} นาที`);
   const ok = await checkPw(pw, u ? u.pw : DUMMY_HASH); // ตรวจเสมอเพื่อไม่ให้เดาได้จากเวลาตอบว่ามีบัญชีไหม
   if (!u || !ok) {
-    if (u) { const f = u.failed + 1; q('UPDATE users SET failed = ?, locked_until = ? WHERE id = ?').run(f >= 5 ? 0 : f, f >= 5 ? now() + 15 * 60e3 : 0, u.id); }
+    G.rules.loginFailed(ip, handle);
+    if (u) { const f = u.failed + 1; q('UPDATE users SET failed = ?, locked_until = ? WHERE id = ?').run(f >= 5 ? 0 : f, f >= 5 ? now() + 15 * 60e3 : 0, u.id); if (f >= 5) G.event('account_locked', { userId: u.id, ip, severity: 'high' }); }
     fail(401, 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
   }
+  if (u.suspended_until > now()) fail(403, 'บัญชีนี้ถูกระงับชั่วคราวจากการละเมิดข้อกำหนด');
   q('UPDATE users SET failed = 0, locked_until = 0 WHERE id = ?').run(u.id);
   createSession(res, u.id, req);
   return { user: pubUser(u) };
@@ -261,6 +333,7 @@ route('POST', '/api/auth/login', async (req, res) => {
 // ออกจากระบบเฉพาะบัญชีที่ใช้อยู่ แล้วสลับไปบัญชีอื่นในเครื่อง (ถ้ามี)
 function signOut(req, res, userId, everywhere) {
   const c = cookies(req);
+  G.audit({ actorType: 'user', actorId: userId, action: everywhere ? 'logout_all' : 'logout', target: userId, ip: clientIp(req) });
   if (everywhere) q('DELETE FROM sessions WHERE user_id = ?').run(userId);
   else { const tk = c['mali_s_' + userId] || c.mali_sid; if (tk) q('DELETE FROM sessions WHERE token = ?').run(sha256(tk)); }
   addCookie(res, `mali_s_${userId}=; ${cookieOpts(req, 0)}`);
@@ -345,11 +418,12 @@ route('GET', '/api/users/:handle', (req, res, p) => {
 route('POST', '/api/users/:handle/follow', (req, res, p) => {
   const me = needUser(req);
   if (limited('follow:' + me.id, 60, 3600e3)) fail(429, 'ติดตามบ่อยเกินไป');
+  if (G.restricted(me.id, 'follow')) fail(429, 'บัญชีของคุณถูกจำกัดการติดตามชั่วคราว 24 ชั่วโมง เพราะติดตามจำนวนมากผิดปกติ');
   const u = q('SELECT * FROM users WHERE handle = ?').get(p.handle) || fail(404, 'ไม่พบบัญชีนี้');
   if (u.id === me.id) fail(400, 'ติดตามตัวเองไม่ได้');
   const has = q('SELECT 1 FROM follows WHERE follower = ? AND followee = ?').get(me.id, u.id);
   if (has) q('DELETE FROM follows WHERE follower = ? AND followee = ?').run(me.id, u.id);
-  else { q('INSERT INTO follows VALUES (?,?,?)').run(me.id, u.id, now()); emit(u.id, 'follow', { user: pubUser(me) }); }
+  else { q('INSERT INTO follows VALUES (?,?,?)').run(me.id, u.id, now()); G.rules.followed(me.id, clientIp(req)); emit(u.id, 'follow', { user: pubUser(me) }); }
   return { following: !has };
 });
 
@@ -469,7 +543,13 @@ route('POST', '/api/chats/:handle', async (req, res, p) => {
   const text = str(b.text || '', 2000, 'ข้อความ');
   const media = b.media == null ? null : mediaUrlOk(b.media) ? b.media : fail(400, 'ไฟล์แนบไม่ถูกต้อง');
   if (!text && !media) fail(400, 'ข้อความว่างไม่ได้');
-  const m = { id: newId('m_'), pair: pairOf(me.id, u.id), from_id: me.id, to_id: u.id, text, media: media ? JSON.stringify(media) : null, created: now(), read_at: null };
+  const follows = (a, b) => !!q('SELECT 1 FROM follows WHERE follower = ? AND followee = ?').get(a, b);
+  const known = follows(u.id, me.id) || q('SELECT 1 FROM messages WHERE pair = ? AND from_id = ?').get(pairOf(me.id, u.id), u.id);
+  if (!known) {
+    if (G.restricted(me.id, 'dm_strangers')) fail(429, 'บัญชีของคุณส่งข้อความหาคนที่ไม่ได้ติดตามคุณได้ไม่ชั่วคราว 24 ชั่วโมง เพราะระบบพบการส่งจำนวนมากผิดปกติ');
+    G.rules.messagedStranger(me, u.id, clientIp(req));
+  }
+  const m = { id: newId('m_'), pair: pairOf(me.id, u.id), from_id: me.id, to_id: u.id, text: kms.seal(text), media: media ? kms.seal(JSON.stringify(media)) : null, created: now(), read_at: null };
   q('INSERT INTO messages VALUES (?,?,?,?,?,?,?,?)').run(m.id, m.pair, m.from_id, m.to_id, m.text, m.media, m.created, null);
   const out = msgOut(m);
   emit(u.id, 'message', { message: out, user: pubUser(me) });
@@ -492,7 +572,7 @@ route('POST', '/api/upload', async req => {
   const buf = await readBody(req, t.max);
   if (buf.length < 16 || !t.magic(buf)) fail(415, 'เนื้อไฟล์ไม่ตรงกับชนิดไฟล์');
   const name = crypto.randomBytes(16).toString('base64url') + '.' + t.ext;
-  fs.writeFileSync(path.join(MEDIA, name), buf, { flag: 'wx' });
+  fs.writeFileSync(path.join(MEDIA, name), kms.sealFile(buf), { flag: 'wx', mode: 0o600 });
   return { url: '/media/' + name, type: type.split('/')[0] };
 });
 
@@ -524,15 +604,260 @@ route('GET', '/api/poll', (req, res, p, url) => {
   });
 });
 
+
+/* ---------------- ความปลอดภัยของบัญชี (ผู้ใช้ดูและจัดการเองได้) ---------------- */
+route('GET', '/api/security/sessions', req => {
+  const me = needUser(req), c = cookies(req), mine = sha256(c['mali_s_' + me.id] || c.mali_sid || '');
+  const rows = q('SELECT * FROM sessions WHERE user_id = ? AND expires > ? AND replaced = 0 ORDER BY last_seen DESC').all(me.id, now());
+  const maskIp = ip => !ip ? '' : ip.includes(':') ? ip.split(':').slice(0, 3).join(':') + ':…' : ip.split('.').slice(0, 2).join('.') + '.x.x';
+  return { sessions: rows.map(s => ({ id: s.sid || s.token.slice(0, 12), device: s.device_label || 'อุปกรณ์ไม่ทราบชื่อ', ip: maskIp(s.ip), country: s.country, created: s.created, lastSeen: s.last_seen || s.created, current: s.token === mine })) };
+});
+route('DELETE', '/api/security/sessions/:id', (req, res, p) => {
+  const me = needUser(req);
+  const r = q('DELETE FROM sessions WHERE user_id = ? AND (sid = ? OR substr(token, 1, 12) = ?)').run(me.id, p.id, p.id);
+  if (!r.changes) fail(404, 'ไม่พบอุปกรณ์นี้');
+  G.audit({ actorType: 'user', actorId: me.id, action: 'revoke_session', target: me.id, ip: clientIp(req) });
+  return { ok: true };
+});
+route('GET', '/api/security/events', req => {
+  const me = needUser(req);
+  const rows = q("SELECT ts, type, severity, detail FROM security_events WHERE user_id = ? AND type IN ('login','new_device_login','token_device_mismatch','account_locked','mass_follow','spam_suspected') ORDER BY ts DESC LIMIT 50").all(me.id);
+  return { events: rows.map(r => { const d = r.detail ? JSON.parse(r.detail) : {}; delete d.fp; return { ts: r.ts, type: r.type, severity: r.severity, detail: d }; }),
+    restrictions: q('SELECT kind, until, reason FROM restrictions WHERE subject = ? AND until > ?').all(me.id, now()) };
+});
+// ใครเข้าถึงข้อมูลของฉัน (เจ้าหน้าที่หรือแอปที่เชื่อมต่อ) จาก audit log
+route('GET', '/api/security/access', req => {
+  const me = needUser(req);
+  return { access: q("SELECT ts, actor_type, actor_id, action FROM audit_log WHERE target_user = ? AND actor_type IN ('staff','app') ORDER BY id DESC LIMIT 100").all(me.id)
+    .map(r => ({ ts: r.ts, by: r.actor_type === 'app' ? (q('SELECT name FROM oauth_apps WHERE client_id = ?').get(r.actor_id)?.name || 'แอป') : 'เจ้าหน้าที่มะลิ', type: r.actor_type, action: r.action })) };
+});
+
+/* ---------------- รายงานเนื้อหา ---------------- */
+const REPORT_REASONS = ['spam', 'harassment', 'nudity', 'violence', 'scam', 'impersonation', 'self_harm', 'other'];
+route('POST', '/api/report', async req => {
+  const me = needUser(req);
+  if (limited('report:' + me.id, 20, 3600e3)) fail(429, 'ส่งรายงานบ่อยเกินไป');
+  const b = await readJson(req);
+  const kind = ['user', 'post', 'comment', 'message'].includes(b.kind) ? b.kind : fail(400, 'ประเภทไม่ถูกต้อง');
+  const reason = REPORT_REASONS.includes(b.reason) ? b.reason : fail(400, 'เหตุผลไม่ถูกต้อง');
+  const target = str(b.target || '', 60, 'เป้าหมาย');
+  let targetUser = null;
+  if (kind === 'user') targetUser = q('SELECT id FROM users WHERE handle = ? OR id = ?').get(target, target)?.id;
+  if (kind === 'post') targetUser = q('SELECT user_id FROM posts WHERE id = ?').get(target)?.user_id;
+  if (kind === 'comment') targetUser = q('SELECT user_id FROM comments WHERE id = ?').get(target)?.user_id;
+  if (kind === 'message') { const m = q('SELECT * FROM messages WHERE id = ?').get(target); if (!m || (m.to_id !== me.id && m.from_id !== me.id)) fail(404, 'ไม่พบข้อความ'); targetUser = m.from_id; }
+  if (!targetUser) fail(404, 'ไม่พบสิ่งที่รายงาน');
+  if (targetUser === me.id) fail(400, 'รายงานตัวเองไม่ได้');
+  q('INSERT INTO reports (id, reporter, kind, target, target_user, reason, note, created) VALUES (?,?,?,?,?,?,?,?)').run(newId('r_'), me.id, kind, target, targetUser, reason, str(b.note || '', 500, 'รายละเอียด'), now());
+  const open = q("SELECT COUNT(DISTINCT reporter) n FROM reports WHERE target_user = ? AND status = 'open' AND created > ?").get(targetUser, now() - 86400e3).n;
+  if (open >= 5) G.event('many_reports', { userId: targetUser, severity: 'high', detail: { reporters: open } });
+  return { ok: true };
+});
+
+/* ---------------- เจ้าหน้าที่ (least privilege + บันทึกทุกการเข้าถึง) ----------------
+   สิทธิ์: user < moderator (ดูรายงาน ดูโปรไฟล์ ระงับบัญชี) < admin (ดู audit log ตั้งสิทธิ์)
+   ให้สิทธิ์ผ่านคำสั่งบนเซิร์ฟเวอร์เท่านั้น: node server/admin.js grant <handle> moderator */
+const ROLE_RANK = { user: 0, moderator: 1, admin: 2 };
+const needRole = (req, role) => { const u = needUser(req); if ((ROLE_RANK[u.role] || 0) < ROLE_RANK[role]) fail(403, 'ไม่มีสิทธิ์'); return u; };
+route('GET', '/api/admin/reports', (req, res, p, url) => {
+  const st = needRole(req, 'moderator');
+  G.audit({ actorType: 'staff', actorId: st.id, action: 'list_reports', ip: clientIp(req) });
+  const status = url.searchParams.get('status') === 'closed' ? 'closed' : 'open';
+  return { reports: q('SELECT r.*, u.handle target_handle FROM reports r LEFT JOIN users u ON u.id = r.target_user WHERE status = ? ORDER BY created DESC LIMIT 200').all(status)
+    .map(r => ({ id: r.id, kind: r.kind, target: r.target, targetHandle: r.target_handle, reason: r.reason, note: r.note, created: r.created })) };
+});
+route('GET', '/api/admin/users/:handle', (req, res, p) => {
+  const st = needRole(req, 'moderator');
+  const u = q('SELECT * FROM users WHERE handle = ?').get(p.handle) || fail(404, 'ไม่พบบัญชีนี้');
+  G.audit({ actorType: 'staff', actorId: st.id, action: 'view_user', target: u.id, ip: clientIp(req) });
+  return { user: { ...pubUser(u), role: u.role, created: u.created, suspendedUntil: u.suspended_until },
+    reports: q('SELECT reason, COUNT(*) n FROM reports WHERE target_user = ? GROUP BY reason').all(u.id),
+    events: q('SELECT ts, type, severity FROM security_events WHERE user_id = ? ORDER BY ts DESC LIMIT 30').all(u.id),
+    posts: q('SELECT * FROM posts WHERE user_id = ? ORDER BY created DESC LIMIT 20').all(u.id).map(x => postOut(x, st.id)) };
+});
+route('POST', '/api/admin/users/:handle/suspend', async (req, res, p) => {
+  const st = needRole(req, 'moderator');
+  const u = q('SELECT * FROM users WHERE handle = ?').get(p.handle) || fail(404, 'ไม่พบบัญชีนี้');
+  if ((ROLE_RANK[u.role] || 0) >= ROLE_RANK[st.role]) fail(403, 'ระงับบัญชีที่มีสิทธิ์เท่ากันหรือสูงกว่าไม่ได้');
+  const b = await readJson(req), days = Math.max(0, Math.min(365, +b.days || 0));
+  q('UPDATE users SET suspended_until = ? WHERE id = ?').run(days ? now() + days * 864e5 : 0, u.id);
+  if (days) q('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  G.audit({ actorType: 'staff', actorId: st.id, action: days ? 'suspend' : 'unsuspend', target: u.id, ip: clientIp(req), detail: { days, reason: str(b.reason || '', 200, 'เหตุผล') } });
+  return { ok: true };
+});
+route('POST', '/api/admin/reports/:id/close', async (req, res, p) => {
+  const st = needRole(req, 'moderator');
+  const r = q("UPDATE reports SET status = 'closed', handled_by = ?, handled_at = ? WHERE id = ?").run(st.id, now(), p.id);
+  if (!r.changes) fail(404, 'ไม่พบรายงาน');
+  G.audit({ actorType: 'staff', actorId: st.id, action: 'close_report', ip: clientIp(req), detail: { report: p.id } });
+  return { ok: true };
+});
+route('GET', '/api/admin/audit', (req, res, p, url) => {
+  const st = needRole(req, 'admin');
+  G.audit({ actorType: 'staff', actorId: st.id, action: 'view_audit', ip: clientIp(req) });
+  return { tampered: G.verifyAudit(), rows: q('SELECT id, ts, actor_type, actor_id, action, target_user, ip FROM audit_log ORDER BY id DESC LIMIT 300').all() };
+});
+
+/* ---------------- OAuth 2.0 + PKCE (ให้แอปอื่นเชื่อมต่อแบบจำกัดสิทธิ์) ----------------
+   - ไคลเอนต์แบบ public เท่านั้น บังคับ PKCE S256 และ redirect_uri ต้องตรงกับที่ลงทะเบียนทุกตัวอักษร
+   - access token อายุ 1 ชม. refresh token 30 วัน และหมุนใหม่ทุกครั้งที่ใช้ (ถ้าเอาโทเค็นเก่ามาใช้ซ้ำ จะยกเลิกทั้งชุด)
+   - scope: profile, posts:read, posts:write — ทุกการใช้งานบันทึกใน audit log และผู้ใช้ยกเลิกได้ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS oauth_apps (client_id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, redirect_uri TEXT NOT NULL, created INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS oauth_codes (code TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id TEXT NOT NULL, scope TEXT NOT NULL, challenge TEXT NOT NULL, redirect_uri TEXT NOT NULL, expires INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS oauth_tokens (token TEXT PRIMARY KEY, family TEXT NOT NULL, kind TEXT NOT NULL, client_id TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, scope TEXT NOT NULL, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+  CREATE INDEX IF NOT EXISTS oauth_tokens_family ON oauth_tokens(family);`);
+const SCOPES = { profile: 'ดูชื่อ ชื่อผู้ใช้ และรูปโปรไฟล์', 'posts:read': 'ดูโพสต์ของคุณ', 'posts:write': 'โพสต์แทนคุณ' };
+const htmlEsc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const redirectOk = u => { try { const x = new URL(u); return (x.protocol === 'https:' || (x.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(x.hostname))) && !x.hash; } catch { return false; } };
+route('POST', '/api/oauth/apps', async req => {
+  const me = needUser(req), b = await readJson(req);
+  if (q('SELECT COUNT(*) n FROM oauth_apps WHERE owner = ?').get(me.id).n >= 10) fail(400, 'ลงทะเบียนแอปได้สูงสุด 10 แอป');
+  const name = str(b.name || '', 40, 'ชื่อแอป') || fail(400, 'ใส่ชื่อแอป');
+  const ru = str(b.redirect_uri || '', 300, 'redirect_uri');
+  if (!redirectOk(ru)) fail(400, 'redirect_uri ต้องเป็น https (หรือ http://localhost สำหรับทดสอบ)');
+  const id = 'app_' + crypto.randomBytes(12).toString('base64url');
+  q('INSERT INTO oauth_apps VALUES (?,?,?,?,?)').run(id, me.id, name, ru, now());
+  G.audit({ actorType: 'user', actorId: me.id, action: 'oauth_app_create', target: me.id, detail: { client_id: id } });
+  return { client_id: id, name, redirect_uri: ru };
+});
+route('GET', '/api/oauth/grants', req => {
+  const me = needUser(req);
+  return { grants: q("SELECT a.client_id, a.name, MIN(t.scope) scope, MAX(t.expires) until FROM oauth_tokens t JOIN oauth_apps a ON a.client_id = t.client_id WHERE t.user_id = ? AND t.kind = 'refresh' AND t.used = 0 AND t.expires > ? GROUP BY a.client_id").all(me.id, now()) };
+});
+route('DELETE', '/api/oauth/grants/:client', (req, res, p) => {
+  const me = needUser(req);
+  q('DELETE FROM oauth_tokens WHERE user_id = ? AND client_id = ?').run(me.id, p.client);
+  G.audit({ actorType: 'user', actorId: me.id, action: 'oauth_revoke', target: me.id, detail: { client_id: p.client } });
+  return { ok: true };
+});
+const issueTokens = (clientId, userId, scope, family = crypto.randomBytes(9).toString('base64url')) => {
+  const at = 'mat_' + crypto.randomBytes(32).toString('base64url'), rt = 'mrt_' + crypto.randomBytes(32).toString('base64url');
+  q('INSERT INTO oauth_tokens VALUES (?,?,?,?,?,?,?,0)').run(sha256(at), family, 'access', clientId, userId, scope, now() + 3600e3);
+  q('INSERT INTO oauth_tokens VALUES (?,?,?,?,?,?,?,0)').run(sha256(rt), family, 'refresh', clientId, userId, scope, now() + 30 * 864e5);
+  return { access_token: at, token_type: 'Bearer', expires_in: 3600, refresh_token: rt, scope };
+};
+// ตรวจ Bearer token สำหรับ API ของแอปภายนอก
+function appUser(req, scope) {
+  const m = /^Bearer\s+(mat_[\w-]{20,})$/.exec(req.headers.authorization || '') || fail(401, 'ต้องใช้ access token');
+  const t = q("SELECT * FROM oauth_tokens WHERE token = ? AND kind = 'access' AND expires > ?").get(sha256(m[1]), now()) || fail(401, 'โทเค็นไม่ถูกต้องหรือหมดอายุ');
+  if (!t.scope.split(' ').includes(scope)) fail(403, `โทเค็นนี้ไม่มีสิทธิ์ ${scope}`);
+  const u = q('SELECT * FROM users WHERE id = ?').get(t.user_id);
+  if (!u || u.suspended_until > now()) fail(401, 'บัญชีไม่พร้อมใช้งาน');
+  if (limited('app:' + t.client_id + ':' + u.id, 120, 60e3)) fail(429, 'แอปนี้เรียกใช้บ่อยเกินไป');
+  G.audit({ actorType: 'app', actorId: t.client_id, action: 'api:' + scope, target: u.id, ip: clientIp(req) });
+  return u;
+}
+route('GET', '/api/v1/me', req => ({ user: pubUser(appUser(req, 'profile')) }));
+route('GET', '/api/v1/posts', req => { const u = appUser(req, 'posts:read'); return { posts: q('SELECT * FROM posts WHERE user_id = ? ORDER BY created DESC LIMIT 50').all(u.id).map(x => postOut(x, u.id)) }; });
+route('POST', '/api/v1/posts', async req => {
+  const u = appUser(req, 'posts:write'), b = await readJson(req);
+  const caption = str(b.caption || '', 2200, 'คำบรรยาย') || fail(400, 'ใส่คำบรรยาย');
+  const id = newId('p_');
+  q('INSERT INTO posts (id, user_id, caption, media, created) VALUES (?,?,?,?,?)').run(id, u.id, caption, '[]', now());
+  return { post: postOut(q('SELECT * FROM posts WHERE id = ?').get(id), u.id) };
+});
+
+// หน้าอนุญาต (consent) และ endpoint token อยู่นอก /api/
+const oauthPage = (title, body) => `<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEsc(title)}</title>
+<style>body{font-family:system-ui,sans-serif;background:#f7f4ee;color:#1f1b16;display:grid;place-items:center;min-height:100vh;margin:0;padding:16px}main{background:#fdfbf7;border:1px solid rgba(31,27,22,.12);border-radius:20px;padding:28px;max-width:420px;width:100%}h1{font-size:20px}li{margin:6px 0}.a{display:flex;gap:10px;margin-top:20px}button{flex:1;height:44px;border-radius:12px;border:0;font:inherit;font-weight:600;cursor:pointer}.ok{background:#c4411a;color:#fff}.no{background:#efe9df}small{color:#776e62}</style></head><body><main>${body}</main></body></html>`;
+const pageHeaders = { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'", 'Cache-Control': 'no-store' };
+async function oauthAuthorize(req, res, url) {
+  const isPost = req.method === 'POST';
+  const form = isPost ? new URLSearchParams((await readBody(req, 8192)).toString()) : url.searchParams;
+  const g = k => String(form.get(k) || '');
+  const app = q('SELECT * FROM oauth_apps WHERE client_id = ?').get(g('client_id'));
+  if (!app || g('redirect_uri') !== app.redirect_uri) return send(res, 400, oauthPage('ผิดพลาด', '<h1>คำขอไม่ถูกต้อง</h1><p>ไม่พบแอปนี้ หรือ redirect_uri ไม่ตรงกับที่ลงทะเบียน</p>'), pageHeaders);
+  const back = params => { const u = new URL(app.redirect_uri); Object.entries(params).forEach(([k, v]) => v != null && u.searchParams.set(k, v)); if (g('state')) u.searchParams.set('state', g('state')); res.writeHead(302, { Location: u.toString(), 'Cache-Control': 'no-store' }); res.end(); };
+  if (g('response_type') !== 'code') return back({ error: 'unsupported_response_type' });
+  if (g('code_challenge_method') !== 'S256' || !/^[\w-]{43,128}$/.test(g('code_challenge'))) return back({ error: 'invalid_request', error_description: 'PKCE S256 required' });
+  const scopes = [...new Set(g('scope').split(/\s+/).filter(Boolean))];
+  if (!scopes.length || scopes.some(s => !SCOPES[s])) return back({ error: 'invalid_scope' });
+  const me = currentUser(req);
+  if (!me) return send(res, 401, oauthPage('เข้าสู่ระบบก่อน', `<h1>เข้าสู่ระบบมะลิก่อน</h1><p>เปิด <a href="/">มะลิ</a> แล้วเข้าสู่ระบบในเมนูออนไลน์ จากนั้นกลับมาที่หน้านี้อีกครั้ง</p>`), pageHeaders);
+  // กัน CSRF ของฟอร์มอนุญาต: โทเค็นผูกกับ session
+  const sessTok = cookies(req)['mali_s_' + me.id] || cookies(req).mali_sid || '';
+  const csrf = crypto.createHmac('sha256', sessTok).update(app.client_id + g('code_challenge')).digest('base64url');
+  if (isPost) {
+    const a = Buffer.from(g('csrf')), b2 = Buffer.from(csrf);
+    if (a.length !== b2.length || !crypto.timingSafeEqual(a, b2)) return send(res, 403, oauthPage('ผิดพลาด', '<h1>คำขอไม่ถูกต้อง</h1>'), pageHeaders);
+    if (g('decision') !== 'allow') return back({ error: 'access_denied' });
+    const code = crypto.randomBytes(24).toString('base64url');
+    q('INSERT INTO oauth_codes VALUES (?,?,?,?,?,?,?)').run(sha256(code), app.client_id, me.id, scopes.join(' '), g('code_challenge'), app.redirect_uri, now() + 60e3);
+    G.audit({ actorType: 'user', actorId: me.id, action: 'oauth_consent', target: me.id, ip: clientIp(req), detail: { client_id: app.client_id, scope: scopes.join(' ') } });
+    return back({ code });
+  }
+  const hidden = ['client_id', 'redirect_uri', 'response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method'].map(k => `<input type="hidden" name="${k}" value="${htmlEsc(g(k))}">`).join('');
+  return send(res, 200, oauthPage('อนุญาตแอป', `<h1>${htmlEsc(app.name)} ขอเชื่อมต่อกับบัญชี @${htmlEsc(me.handle)}</h1><p>แอปนี้จะได้สิทธิ์:</p><ul>${scopes.map(s => `<li>${htmlEsc(SCOPES[s])}</li>`).join('')}</ul>
+    <small>แอปนี้จะไม่เห็นรหัสผ่านหรือข้อความแชตของคุณ ยกเลิกได้ทุกเมื่อที่ ออนไลน์ &gt; ฉัน &gt; ความปลอดภัย</small>
+    <form method="post" action="/oauth/authorize">${hidden}<input type="hidden" name="csrf" value="${csrf}"><div class="a"><button class="no" name="decision" value="deny">ไม่อนุญาต</button><button class="ok" name="decision" value="allow">อนุญาต</button></div></form>`), pageHeaders);
+}
+async function oauthToken(req, res) {
+  const f = new URLSearchParams((await readBody(req, 8192)).toString()), g = k => String(f.get(k) || '');
+  const err = (code, d) => send(res, 400, { error: code, error_description: d }, { 'Cache-Control': 'no-store' });
+  if (limited('oauth_token:' + clientIp(req), 60, 60e3)) return send(res, 429, { error: 'slow_down' });
+  if (g('grant_type') === 'authorization_code') {
+    const c = q('SELECT * FROM oauth_codes WHERE code = ?').get(sha256(g('code')));
+    q('DELETE FROM oauth_codes WHERE code = ?').run(sha256(g('code'))); // ใช้ได้ครั้งเดียว
+    if (!c || c.expires < now() || c.client_id !== g('client_id') || c.redirect_uri !== g('redirect_uri')) return err('invalid_grant', 'code ไม่ถูกต้องหรือหมดอายุ');
+    const chal = crypto.createHash('sha256').update(g('code_verifier')).digest('base64url');
+    if (!/^[\w.~-]{43,128}$/.test(g('code_verifier')) || chal !== c.challenge) return err('invalid_grant', 'PKCE verifier ไม่ตรง');
+    return send(res, 200, issueTokens(c.client_id, c.user_id, c.scope), { 'Cache-Control': 'no-store' });
+  }
+  if (g('grant_type') === 'refresh_token') {
+    const t = q("SELECT * FROM oauth_tokens WHERE token = ? AND kind = 'refresh'").get(sha256(g('refresh_token')));
+    if (!t || t.client_id !== g('client_id') || t.expires < now()) return err('invalid_grant', 'refresh token ไม่ถูกต้อง');
+    if (t.used) { // ใช้โทเค็นซ้ำ = อาจถูกขโมย → ยกเลิกทั้งชุด
+      q('DELETE FROM oauth_tokens WHERE family = ?').run(t.family);
+      G.event('oauth_refresh_reuse', { userId: t.user_id, ip: clientIp(req), severity: 'high', detail: { client_id: t.client_id } });
+      return err('invalid_grant', 'refresh token ถูกใช้ไปแล้ว ยกเลิกการเชื่อมต่อทั้งหมดของแอปนี้แล้ว');
+    }
+    q('UPDATE oauth_tokens SET used = 1 WHERE token = ?').run(t.token);
+    q("DELETE FROM oauth_tokens WHERE family = ? AND kind = 'access'").run(t.family);
+    return send(res, 200, issueTokens(t.client_id, t.user_id, t.scope, t.family), { 'Cache-Control': 'no-store' });
+  }
+  return err('unsupported_grant_type');
+}
+async function oauthRevoke(req, res) {
+  const f = new URLSearchParams((await readBody(req, 8192)).toString());
+  const t = q('SELECT * FROM oauth_tokens WHERE token = ?').get(sha256(String(f.get('token') || '')));
+  if (t) q('DELETE FROM oauth_tokens WHERE family = ?').run(t.family);
+  send(res, 200, {}); // ตาม RFC 7009 ตอบ 200 เสมอ
+}
+setInterval(() => { q('DELETE FROM oauth_codes WHERE expires < ?').run(now()); q('DELETE FROM oauth_tokens WHERE expires < ?').run(now()); }, 3600e3).unref();
+
 /* ---------------- ไฟล์ของแอป ---------------- */
 function serveStatic(req, res, pathname) {
   let rel;
   if (pathname === '/' || pathname === '/index.html') rel = 'index.html';
   else if (pathname === '/sw.js' || pathname === '/manifest.webmanifest') rel = pathname.slice(1);
   else if (/^\/(css|js|icons)\/[\w\-./]+$/.test(pathname) && !pathname.includes('..')) rel = pathname.slice(1);
-  else if (/^\/media\/[A-Za-z0-9_-]+\.\w+$/.test(pathname)) return serveFile(req, res, path.join(MEDIA, path.basename(pathname)), true);
+  else if (/^\/media\/[A-Za-z0-9_-]+\.\w+$/.test(pathname)) return serveMedia(req, res, path.join(MEDIA, path.basename(pathname)));
+  else if (pathname === '/.well-known/security.txt' || pathname === '/security.txt') { send(res, 200, SECURITY_TXT); return true; }
   else return false;
   return serveFile(req, res, path.join(ROOT, rel), false);
+}
+// ไฟล์สื่อถูกเข้ารหัสบนดิสก์ ถอดรหัสในหน่วยความจำก่อนส่ง (รองรับ Range สำหรับวิดีโอ)
+const mediaCache = new Map(); let mediaCacheBytes = 0;
+function serveMedia(req, res, file) {
+  let buf = mediaCache.get(file);
+  if (!buf) {
+    try { buf = kms.openFile(fs.readFileSync(file)); } catch (e) { send(res, 404, 'Not found'); return true; }
+    if (buf.length < 8 << 20) { mediaCache.set(file, buf); mediaCacheBytes += buf.length; while (mediaCacheBytes > 64 << 20) { const [k, v] = mediaCache.entries().next().value; mediaCache.delete(k); mediaCacheBytes -= v.length; } }
+  }
+  const ext = path.extname(file).slice(1).toLowerCase();
+  const headers = { ...SEC_HEADERS, 'Content-Type': MIME_BY_EXT[ext] || 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=31536000, immutable', 'Content-Disposition': 'inline', ETag: '"' + path.basename(file) + '"' };
+  if (req.headers['if-none-match'] === headers.ETag) { res.writeHead(304, headers); return res.end(), true; }
+  const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  if (m && (m[1] || m[2])) {
+    let start = m[1] ? +m[1] : buf.length - +m[2], end = m[1] && m[2] ? +m[2] : buf.length - 1;
+    if (start >= buf.length || start < 0 || end < start) { res.writeHead(416, { ...headers, 'Content-Range': `bytes */${buf.length}` }); return res.end(), true; }
+    end = Math.min(end, buf.length - 1);
+    res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${buf.length}`, 'Content-Length': end - start + 1 });
+    return res.end(req.method === 'HEAD' ? undefined : buf.subarray(start, end + 1)), true;
+  }
+  res.writeHead(200, { ...headers, 'Content-Length': buf.length });
+  return res.end(req.method === 'HEAD' ? undefined : buf), true;
 }
 function serveFile(req, res, file, immutable) {
   let st;
@@ -541,6 +866,7 @@ function serveFile(req, res, file, immutable) {
   const type = MIME_BY_EXT[ext] || 'application/octet-stream';
   const etag = `"${st.size.toString(36)}-${st.mtimeMs.toString(36)}"`;
   const headers = { ...SEC_HEADERS, 'Content-Type': type, ETag: etag, 'Accept-Ranges': 'bytes', 'Cache-Control': immutable ? 'private, max-age=31536000, immutable' : 'no-cache' };
+  if (ext === 'html') headers['Content-Security-Policy'] = CSP;
   if (immutable) headers['Content-Disposition'] = 'inline';
   if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); res.end(); return true; }
   // รองรับ Range สำหรับวิดีโอ
@@ -567,11 +893,22 @@ const server = http.createServer(async (req, res) => {
   try {
     if (pathname.startsWith('/api/')) {
       // กัน CSRF: คำขอที่เปลี่ยนข้อมูลต้องมีเฮดเดอร์นี้ ซึ่งเว็บอื่นส่งข้ามโดเมนไม่ได้โดยไม่ผ่าน CORS preflight (เราไม่อนุญาต)
-      if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers['x-mali'] !== '1') fail(403, 'คำขอไม่ถูกต้อง');
-      if (limited('ip:' + clientIp(req), 600, 60e3)) fail(429, 'เรียกใช้บ่อยเกินไป');
+      req._res = res;
+      const bearer = /^Bearer\s+/i.test(req.headers.authorization || '');
+      // คำขอแบบ Bearer (แอปที่เชื่อมต่อผ่าน OAuth) ไม่ใช้คุกกี้ จึงไม่ต้องกัน CSRF ด้วยเฮดเดอร์
+      if (!bearer && req.method !== 'GET' && req.method !== 'HEAD' && req.headers['x-mali'] !== '1') fail(403, 'คำขอไม่ถูกต้อง');
+      const ip = clientIp(req);
+      if (G.restricted(ip, 'all')) fail(429, 'เครือข่ายนี้ถูกระงับชั่วคราว');
+      if (limited('ip:' + ip, 600, 60e3)) { G.event('rate_limit_ip', { ip, severity: 'info' }); fail(429, 'เรียกใช้บ่อยเกินไป'); }
       for (const r of routes) {
         if (r.method !== req.method) continue;
         const m = r.re.exec(pathname); if (!m) continue;
+        // จำกัดต่อ endpoint: ต่อ IP และต่อบัญชี (ดูข้อมูลผู้ใช้จำกัดเข้มกว่าเพื่อกันบอทดูดข้อมูล)
+        const scrape = /^\/api\/(users|suggestions|v1\/users)/.test(pathname);
+        const per = scrape ? 60 : 240;
+        if (limited(`ep:${ip}:${r.method}${r.pattern}`, per, 60e3)) fail(429, 'เรียกใช้ส่วนนี้บ่อยเกินไป รอสักครู่');
+        const uid = !bearer && currentUser(req)?.id;
+        if (uid && limited(`epu:${uid}:${r.method}${r.pattern}`, per, 60e3)) fail(429, 'เรียกใช้ส่วนนี้บ่อยเกินไป รอสักครู่');
         const params = Object.fromEntries(Object.entries(m.groups || {}).map(([k, v]) => [k, decodeURIComponent(v)]));
         const out = await r.fn(req, res, params, url);
         if (out !== undefined && !res.headersSent) send(res, 200, out);
@@ -579,6 +916,9 @@ const server = http.createServer(async (req, res) => {
       }
       fail(404, 'ไม่พบ API นี้');
     }
+    if (pathname === '/oauth/authorize' && (req.method === 'GET' || req.method === 'POST')) { req._res = res; return await oauthAuthorize(req, res, url); }
+    if (pathname === '/oauth/token' && req.method === 'POST') return await oauthToken(req, res);
+    if (pathname === '/oauth/revoke' && req.method === 'POST') return await oauthRevoke(req, res);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
     if (!serveStatic(req, res, pathname)) send(res, 404, 'Not found');
   } catch (e) {
@@ -590,6 +930,18 @@ const server = http.createServer(async (req, res) => {
 });
 server.headersTimeout = 20e3;
 server.requestTimeout = 120e3;
+server.keepAliveTimeout = 30e3;
+server.maxHeadersCount = 60;
+server.maxRequestsPerSocket = 1000;
+// จำกัดจำนวนการเชื่อมต่อพร้อมกันต่อ IP (กันการเปิดค้างไว้จำนวนมาก)
+const conns = new Map();
+server.on('connection', sock => {
+  const ip = sock.remoteAddress || '?';
+  if (isLoopback(ip)) return; // หลังพร็อกซี (Caddy/Cloudflare) นับต่อ IP จริงที่ชั้นแอปแทน
+  const n = (conns.get(ip) || 0) + 1; conns.set(ip, n);
+  sock.on('close', () => { const k = (conns.get(ip) || 1) - 1; k ? conns.set(ip, k) : conns.delete(ip); });
+  if (n > 64) sock.destroy();
+});
 // ล้าง session ที่หมดอายุ
 setInterval(() => q('DELETE FROM sessions WHERE expires < ?').run(now()), 3600e3).unref();
 
