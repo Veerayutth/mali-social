@@ -342,7 +342,7 @@
       { label: 'รูปภาพหรือวิดีโอ', icon: 'image', act: async () => {
         const files = await M.pickFiles('image/*,video/*', true);
         for (const f of files.slice(0, 5)) {
-          if (f.type.startsWith('video')) { const key = M.uid('v'); M.mem.videos[key] = URL.createObjectURL(f); await sendMsg(c, { type: 'image', vid: key, art: { kind: 'abstract', seed: 3 } }); }
+          if (f.type.startsWith('video')) { const key = M.saveVideo(f); await sendMsg(c, { type: 'image', vid: key, art: { kind: 'abstract', seed: 3 } }); }
           else {
             const v = await M.adult.guard(f, 'chat');
             if (!v) continue;
@@ -439,9 +439,10 @@
     render() {
       const st = M.st;
       return M.bar('การโทร', `<button class="ibtn" data-act="newCall" aria-label="โทรใหม่">${I('plus')}</button>`) + `<div class="scroll"><div class="col">
+        <button class="p2p-cta" data-act="openP2P"><span class="row-ic">${I('video', 24)}</span><span class="row-tx"><b>โทรหาเพื่อนที่อีกเครื่อง (ของจริง)</b><small>วิดีโอคอลและแชตข้ามเครื่องฟรี ใช้รหัสหรือลิงก์</small></span>${I('chev', 18)}</button>
         <h3 class="sec-t pad">ล่าสุด</h3><div class="rows">${st.calls.slice().sort((a, b) => b.ts - a.ts).map(k => { const u = M.user(k.userId); return `<div class="row">${M.avatar(u, 44)}<span class="row-tx"><span class="${k.missed ? 'neg' : ''}">${esc(u.name)}</span><small>${k.dir === 'out' ? 'โทรออก' : k.missed ? 'สายที่ไม่ได้รับ' : 'สายเข้า'} · ${k.video ? 'วิดีโอ' : 'เสียง'}${k.dur ? ' · ' + M.dur(k.dur) : ''} · ${M.ago(k.ts)}</small></span>
           <button class="ibtn" data-act="callUser2" data-id="${u.id}" data-video="0" aria-label="โทรด้วยเสียง">${I('phone')}</button><button class="ibtn" data-act="callUser2" data-id="${u.id}" data-video="1" aria-label="วิดีโอคอล">${I('video')}</button></div>`; }).join('')}</div>
-        <p class="note pad">การโทรในต้นแบบเป็นการจำลอง ถ้าอนุญาตกล้อง จะเห็นภาพจากกล้องของคุณในหน้าต่างเล็ก</p></div></div>`;
+        <p class="note pad">การโทรหาเพื่อนตัวอย่างในรายการนี้เป็นการจำลอง ถ้าจะโทรจริงให้ใช้ปุ่มโทรหาเพื่อนที่อีกเครื่องด้านบน</p></div></div>`;
     }
   };
   A.newCall = () => M.menu(Object.values(M.st.users).filter(u => u.friend).map(u => ({ label: u.name, sub: u.handle, icon: 'phone', act: () => M.push('call', { userId: u.id, video: false }) })), 'โทรหา');

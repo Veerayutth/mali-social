@@ -103,7 +103,7 @@
         if (d.type !== 'post') d.slides = [];
         for (const f of files.slice(0, max - d.slides.length)) {
           if (f.type.startsWith('video')) {
-            const key = M.uid('v'); M.mem.videos[key] = URL.createObjectURL(f);
+            const key = M.saveVideo(f);
             const len = await new Promise(r => { const v = document.createElement('video'); v.preload = 'metadata'; v.onloadedmetadata = () => r(v.duration || 30); v.onerror = () => r(30); v.src = M.mem.videos[key]; });
             d.len = Math.round(len * 2) / 2; d.trim = [0, d.len];
             d.slides.push({ vid: key, video: true, art: { kind: 'abstract', seed: 5 }, overlays: [] });

@@ -819,3 +819,29 @@ button.row:hover, label.row:hover { background: color-mix(in srgb, var(--tx) 4%,
 .lang-progress { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); z-index: 90; background: var(--tx); color: var(--bg); border-radius: var(--r); padding: 10px 16px; font-size: 14px; min-width: 220px; overflow: hidden; }
 .lang-progress i { position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: var(--accent); transition: width .2s; }
 [dir="rtl"] .bar .ibtn[data-act="back"] .ic, [dir="rtl"] .row .ic.muted { transform: scaleX(-1); }
+
+/* ---------- คุยข้ามเครื่อง (P2P) ---------- */
+.p2p-cta { display: flex; align-items: center; gap: 12px; width: calc(100% - 32px); margin: 12px 16px 4px; padding: 14px; border-radius: var(--r-lg); background: var(--raised); border: 1px solid var(--line); text-align: left; color: var(--tx); }
+.p2p-cta .row-ic { color: var(--accent); }
+.p2p-cta .row-tx { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.p2p-cta small { color: var(--tx2); }
+.p2p-home { display: flex; flex-direction: column; gap: 16px; padding-top: 16px; padding-bottom: 32px; }
+.p2p-hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; }
+.p2p-hero h2 { font-size: 20px; line-height: 1.35; max-width: 22em; }
+.p2p-card { background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.p2p-card .sec-t { margin: 0; }
+.p2p-code { font-size: 34px; font-weight: 600; letter-spacing: .12em; text-align: center; font-variant-numeric: tabular-nums; color: var(--accent); }
+.p2p-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.p2p-row .field { flex: 1; min-width: 0; letter-spacing: .08em; }
+.p2p-row .btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+form.p2p-row .btn { flex: 0 0 auto; }
+.p2p-err { background: color-mix(in srgb, var(--accent) 10%, var(--bg)); color: var(--accent); padding: 10px 14px; border-radius: var(--r-sm); }
+.p2p-log { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; }
+.p2p-sys { align-self: center; font-size: 12px; color: var(--tx2); text-align: center; padding: 4px 0; }
+.p2p-form { display: flex; gap: 8px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
+.p2p-form .field { flex: 1; }
+.page[data-page="p2p"] { display: flex; flex-direction: column; }
+.page[data-page="p2p"] .p2p-log { flex: 1; }
+.p2p-call .call-remote video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #111; }
+.p2p-wait { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(243, 238, 230, .7); z-index: 1; }
+.p2p-call .call-self video { opacity: 1; }

@@ -46,6 +46,10 @@
           { t: 'nav', label: 'ฟอนต์และขนาดตัวอักษร', icon: 'type', page: 'fonts', value: (M.FONTS.find(f => f[0] === (s.font || 'Anuphan')) || M.FONTS[0])[1].split(' (')[0] },
           { t: 'nav', label: 'สีวงสตอรี่', sub: 'สีของวงรอบรูปโปรไฟล์เมื่อคุณลงสตอรี่', icon: 'star', page: 'ringColor' },
           { t: 'choice', k: 'settings.theme', label: 'ธีม', icon: 'moon', options: [['light', 'สว่าง'], ['dark', 'มืด'], ['system', 'ตามระบบ']] },
+          { t: 'head', label: 'ข้อมูลและแอป' },
+          { t: 'nav', label: 'ติดตั้งมะลิลงเครื่อง', sub: 'เปิดจากหน้าจอหลักและใช้แบบออฟไลน์ได้', icon: 'upload', act: 'installApp' },
+          { t: 'nav', label: 'สำรองข้อมูลเป็นไฟล์', sub: 'โพสต์ แชต รูป วิดีโอ และการตั้งค่า ใช้ย้ายไปเครื่องอื่นได้', icon: 'archive', act: 'backupData' },
+          { t: 'nav', label: 'กู้คืนจากไฟล์สำรอง', icon: 'undo', act: 'restoreData' },
           { t: 'head', label: 'ช่วยเหลือ' },
           { t: 'nav', label: 'ให้น้องตูมแนะนำการใช้งานอีกครั้ง', icon: 'info', act: 'resetTips' },
           { t: 'nav', label: 'เกี่ยวกับต้นแบบนี้และข้อจำกัด', icon: 'info', page: 'about' },
@@ -62,6 +66,53 @@
     }
   };
   A.resetTips = () => { M.st.tips = {}; M.toast('น้องตูมจะกลับมาแนะนำในแต่ละหน้า'); M.refresh(); };
+  /* ---------- ติดตั้งแอป ---------- */
+  A.installApp = async () => {
+    if (matchMedia('(display-mode: standalone)').matches || navigator.standalone) return M.toast('คุณกำลังใช้มะลิแบบแอปที่ติดตั้งแล้ว');
+    if (M.installPrompt) { M.installPrompt.prompt(); const r = await M.installPrompt.userChoice; M.installPrompt = null; if (r.outcome !== 'accepted') M.toast('ยกเลิกการติดตั้ง'); return; }
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    const file = location.protocol === 'file:';
+    M.sheet(`<div class="dlg"><h2>ติดตั้งมะลิลงเครื่อง</h2>
+      ${file ? `<p class="muted">ตอนนี้เปิดจากไฟล์โดยตรง ซึ่งติดตั้งเป็นแอปไม่ได้ ให้เปิดผ่านเว็บเซิร์ฟเวอร์ก่อน เช่นรันคำสั่ง <code>python3 -m http.server 5173</code> ในโฟลเดอร์แอป แล้วเปิด localhost:5173 หรืออัปโหลดขึ้นโฮสต์ฟรีอย่าง GitHub Pages</p>`
+        : ios ? `<p class="muted">ใน Safari แตะปุ่มแชร์ แล้วเลือก "เพิ่มไปยังหน้าจอโฮม"</p>`
+        : `<p class="muted">เปิดเมนูของเบราว์เซอร์ แล้วเลือก "ติดตั้งแอป" หรือ "เพิ่มไปยังหน้าจอหลัก" ถ้าไม่เห็นตัวเลือกนี้ แปลว่าเบราว์เซอร์ยังไม่รองรับ</p>`}
+      <div class="dlg-a"><button class="btn pri" data-act="closeSheet">เข้าใจแล้ว</button></div></div>`);
+  };
+
+  /* ---------- สำรองและกู้คืนข้อมูล (ฟรี ไม่ต้องมีเซิร์ฟเวอร์) ---------- */
+  const blobToData = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(b); });
+  A.backupData = async () => {
+    M.toast('กำลังเตรียมไฟล์สำรอง…');
+    const files = {};
+    try { for (const k of await M.idb.keys()) { if (k === 'state') continue; const v = await M.idb.get(k); if (v instanceof Blob) files[k] = await blobToData(v); } } catch (e) {}
+    const data = { app: 'mali', format: 1, exported: new Date().toISOString(), state: M.st, files };
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `mali-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    M.toast(`สร้างไฟล์สำรองแล้ว (${(blob.size / 1048576).toFixed(1)} MB) ไฟล์นี้มีข้อมูลส่วนตัว เก็บไว้ให้ดี`, { ms: 5000 });
+  };
+  A.restoreData = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'application/json,.json';
+    inp.onchange = async () => {
+      const f = inp.files[0]; if (!f) return;
+      let data;
+      try { data = JSON.parse(await f.text()); } catch (e) { return M.toast('ไฟล์นี้ไม่ใช่ไฟล์สำรองของมะลิ'); }
+      if (data?.app !== 'mali' || !data.state?.me || !Array.isArray(data.state.posts)) return M.toast('ไฟล์นี้ไม่ใช่ไฟล์สำรองของมะลิ');
+      if (!(await M.confirm('กู้คืนข้อมูลจากไฟล์นี้ไหม', `สำรองไว้เมื่อ ${new Date(data.exported).toLocaleString(M.locale())} ข้อมูลปัจจุบันในเครื่องนี้จะถูกแทนที่`, 'กู้คืน', true))) return;
+      try {
+        for (const [k, v] of Object.entries(data.files || {})) {
+          if (!/^(v_|banner_)[\w-]+$/.test(k) || typeof v !== 'string' || !v.startsWith('data:')) continue; // รับเฉพาะคีย์และชนิดที่แอปสร้าง
+          await M.idb.put(k, await (await fetch(v)).blob());
+        }
+        M.store.state = data.state; await M.store.saveNow();
+        location.reload();
+      } catch (e) { M.toast('กู้คืนไม่สำเร็จ'); }
+    };
+    inp.click();
+  };
   A.resetData = async () => { if (await M.confirm('รีเซ็ตข้อมูลทั้งหมดไหม', 'โพสต์ แชต และการตั้งค่าที่คุณทำในเครื่องนี้จะหายไป', 'รีเซ็ต', true)) M.store.reset(); };
 
   /* ความเป็นส่วนตัวของบัญชี */
@@ -327,7 +378,7 @@
     render: () => M.bar('เกี่ยวกับต้นแบบนี้') + `<div class="scroll"><div class="col pad prose">
       <div class="center">${M.logo(48)}<h2>มะลิ</h2><p class="muted">ต้นแบบแอปโซเชียลที่รวมการแชร์รูปและวิดีโอเข้ากับแชตและชุมชน</p>${M.bud('happy', 80)}<p class="muted small">น้องตูม ผู้ช่วยประจำแอป</p></div>
       <h3>ข้อจำกัดของต้นแบบ</h3><ul>
-        <li>ไม่มีระบบหลังบ้าน ข้อมูลทั้งหมดเก็บใน localStorage ของเบราว์เซอร์เครื่องนี้ (ประมาณ 5 MB) รูปที่อัปโหลดจำนวนมากอาจบันทึกไม่ได้</li>
+        <li>ไม่มีระบบหลังบ้าน ข้อมูลทั้งหมดเก็บใน IndexedDB ของเบราว์เซอร์เครื่องนี้ ไม่ซิงก์ไปเครื่องอื่น</li>
         <li>วิดีโอที่อัปโหลดอยู่ในหน่วยความจำชั่วคราว รีเฟรชแล้วจะหายไป</li>
         <li>เพื่อน การตอบแชต ผู้ชมไลฟ์ การโทร ยอดถูกใจหลังโพสต์ และสถิติแดชบอร์ด เป็นการจำลอง</li>
         <li>การสรุปแชตด้วย AI การพากย์ AI และการตรวจจับภาพไม่เหมาะสม เป็นการจำลอง ไม่ได้เรียกโมเดล AI จริง</li>

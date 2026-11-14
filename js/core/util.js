@@ -1,5 +1,5 @@
 'use strict';
-/* ตัวช่วยพื้นฐาน + ที่เก็บสถานะ (localStorage) */
+/* ตัวช่วยพื้นฐาน + ที่เก็บสถานะ (IndexedDB, ถ้าใช้ไม่ได้จะใช้ localStorage) */
 window.M = window.M || {};
 (function (M) {
   const MIN = 60000, HOUR = 3600000, DAY = 86400000;
@@ -74,23 +74,66 @@ window.M = window.M || {};
   M.idb = {
     put: (k, v) => idbDo('readwrite', s => s.put(v, k)),
     get: k => idbDo('readonly', s => s.get(k)),
-    del: k => idbDo('readwrite', s => s.delete(k))
+    del: k => idbDo('readwrite', s => s.delete(k)),
+    keys: () => idbDo('readonly', s => s.getAllKeys())
   };
 
-  /* ---------- ที่เก็บสถานะ ---------- */
-  const KEY = 'mali.v1';
-  M.mem = { videos: {}, plain: {} }; // ข้อมูลชั่วคราว ไม่บันทึกลงเครื่อง (วิดีโอที่อัปโหลด, ข้อความถอดรหัสแล้ว)
+  /* ---------- ที่เก็บสถานะ ----------
+     เก็บใน IndexedDB (พื้นที่หลายร้อย MB ขึ้นกับเครื่อง) ถ้าเบราว์เซอร์ไม่ให้ใช้ (เช่นบางโหมดส่วนตัว)
+     จะกลับไปใช้ localStorage (~5 MB) ข้อมูลเก่าใน localStorage จะถูกย้ายมาให้อัตโนมัติ */
+  const KEY = 'mali.v1', IDB_KEY = 'state';
+  M.mem = { videos: {}, plain: {} }; // ข้อมูลชั่วคราว (URL ของวิดีโอที่โหลดแล้ว, ข้อความถอดรหัสแล้ว)
   M.store = {
-    state: null,
-    load() {
-      try { const raw = localStorage.getItem(KEY); if (raw) { this.state = JSON.parse(raw); return true; } } catch (e) { console.warn(e); }
-      return false;
+    state: null, backend: 'idb',
+    async load() {
+      try {
+        const raw = await M.idb.get(IDB_KEY);
+        if (raw) { this.state = JSON.parse(raw); return true; }
+        const old = localStorage.getItem(KEY);
+        if (old) { this.state = JSON.parse(old); await M.idb.put(IDB_KEY, old); try { localStorage.removeItem(KEY); } catch (e) {} return true; }
+        return false;
+      } catch (e) {
+        console.warn('IndexedDB ใช้ไม่ได้ ใช้ localStorage แทน', e); this.backend = 'ls';
+        try { const raw = localStorage.getItem(KEY); if (raw) { this.state = JSON.parse(raw); return true; } } catch (e2) { console.warn(e2); }
+        return false;
+      }
     },
-    saveNow() {
-      try { localStorage.setItem(KEY, JSON.stringify(this.state)); }
+    async saveNow() {
+      const json = JSON.stringify(this.state);
+      if (this.backend === 'idb') {
+        try { await M.idb.put(IDB_KEY, json); return; }
+        catch (e) { M.toast && M.toast('พื้นที่เก็บข้อมูลของเครื่องเต็ม ข้อมูลล่าสุดอาจไม่ถูกบันทึก'); return; }
+      }
+      try { localStorage.setItem(KEY, json); }
       catch (e) { M.toast && M.toast('พื้นที่เก็บข้อมูลของเบราว์เซอร์เต็ม รูปใหม่อาจไม่ถูกบันทึกหลังรีเฟรช'); }
     },
-    reset() { try { localStorage.removeItem(KEY); } catch (e) {} location.reload(); }
+    async reset() {
+      try { await M.idb.del(IDB_KEY); const ks = await M.idb.keys(); await Promise.all(ks.map(k => M.idb.del(k))); } catch (e) {}
+      try { localStorage.removeItem(KEY); } catch (e) {}
+      location.reload();
+    }
+  };
+  // บันทึกทันทีเมื่อผู้ใช้สลับแอป/ปิดแท็บ
+  addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && M.store.state) M.store.saveNow(); });
+
+  /* วิดีโอที่อัปโหลด: เก็บไฟล์ใน IndexedDB เพื่อให้รีเฟรชแล้วยังอยู่ */
+  M.saveVideo = file => {
+    const key = M.uid('v');
+    M.mem.videos[key] = URL.createObjectURL(file);
+    M.idb.put('v_' + key, file).catch(() => M.toast && M.toast('บันทึกวิดีโอไม่ได้ วิดีโอจะหายเมื่อรีเฟรช'));
+    return key;
+  };
+  M.loadVideos = async () => {
+    const used = new Set();
+    JSON.stringify(M.st, (k, v) => { if (k === 'vid' && typeof v === 'string') used.add(v); return v; });
+    let keys = [];
+    try { keys = await M.idb.keys(); } catch (e) { return; }
+    await Promise.all(keys.filter(k => typeof k === 'string' && k.startsWith('v_')).map(async k => {
+      const id = k.slice(2);
+      if (!used.has(id)) return M.idb.del(k).catch(() => {}); // ลบวิดีโอที่ไม่มีโพสต์ใช้แล้ว
+      const blob = await M.idb.get(k).catch(() => null);
+      if (blob) M.mem.videos[id] = URL.createObjectURL(blob);
+    }));
   };
   M.store.save = M.debounce(() => M.store.saveNow(), 250);
   Object.defineProperty(M, 'st', { get() { return M.store.state; } });
