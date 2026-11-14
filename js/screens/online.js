@@ -38,18 +38,38 @@
     return C.available;
   };
 
-  /* เรียลไทม์ */
-  C.connect = () => {
-    if (C.es || !C.me) return;
-    const es = C.es = new EventSource('/api/events');
-    es.addEventListener('message', e => onMessage(JSON.parse(e.data)));
-    es.addEventListener('read', () => { const pg = topOf('onlineChat'); if (pg) markSeen(pg); });
-    es.addEventListener('like', e => { const d = JSON.parse(e.data); M.toast(`${d.user.name} ถูกใจโพสต์ของคุณ`); });
-    es.addEventListener('comment', e => { const d = JSON.parse(e.data); M.toast(`${d.user.name} แสดงความคิดเห็น: ${d.text}`); });
-    es.addEventListener('follow', e => { const d = JSON.parse(e.data); M.toast(`${d.user.name} เริ่มติดตามคุณ`); });
-    es.addEventListener('post', () => { C.feed = null; const pg = topOf('online'); if (pg && C.tab === 'feed') loadFeed(); });
+  /* เรียลไทม์: ลอง SSE ก่อน ถ้า 4 วินาทีไม่ได้รับ hello (เช่นพร็อกซีบัฟเฟอร์ไว้) เปลี่ยนเป็น long-poll */
+  const handlers = {
+    message: d => onMessage(d),
+    read: () => { const pg = topOf('onlineChat'); if (pg) markSeen(pg); },
+    like: d => M.toast(`${d.user.name} ถูกใจโพสต์ของคุณ`),
+    comment: d => M.toast(`${d.user.name} แสดงความคิดเห็น: ${d.text}`),
+    follow: d => M.toast(`${d.user.name} เริ่มติดตามคุณ`),
+    post: () => { C.feed = null; if (topOf('online') && C.tab === 'feed') loadFeed(); }
   };
-  C.disconnect = () => { C.es?.close(); C.es = null; };
+  C.connect = () => {
+    if (C.es || C.polling || !C.me) return;
+    const es = C.es = new EventSource('/api/events');
+    let ok = false;
+    es.addEventListener('hello', () => { ok = true; });
+    Object.keys(handlers).forEach(k => es.addEventListener(k, e => { try { handlers[k](JSON.parse(e.data)); } catch (err) { console.warn(err); } }));
+    setTimeout(() => { if (!ok && C.es === es) { es.close(); C.es = null; startPolling(); } }, 4000);
+  };
+  async function startPolling() {
+    if (C.polling) return;
+    const run = C.polling = {};
+    let seq = 0, delay = 1000;
+    while (C.polling === run && C.me) {
+      try {
+        const d = await C.api('GET', '/poll?after=' + seq);
+        if (C.polling !== run) break;
+        if (seq) d.events.forEach(e => { try { handlers[e.type]?.(e.data); } catch (err) { console.warn(err); } });
+        seq = d.seq; delay = 1000;
+      } catch (e) { if (e.status === 401) break; await M.sleep(delay); delay = Math.min(delay * 2, 30000); }
+    }
+    if (C.polling === run) C.polling = null;
+  }
+  C.disconnect = () => { C.es?.close(); C.es = null; C.polling = null; };
 
   const topOf = name => { const t = M.topPage(); return t?.dataset.page === name ? t : null; };
   const redraw = () => { const t = M.topPage(); if (t && /^online/.test(t.dataset.page)) M.renderPage(t); };

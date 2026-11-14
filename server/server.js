@@ -19,7 +19,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.resolve(process.env.MALI_DATA || path.join(__dirname, 'data'));
 const MEDIA = path.join(DATA, 'media');
-const SECURE_COOKIE = process.env.HTTPS === '1'; // ตั้งเป็น 1 เมื่อรันหลัง HTTPS
+const FORCE_SECURE = process.env.HTTPS === '1'; // บังคับคุกกี้ Secure เสมอ
 fs.mkdirSync(MEDIA, { recursive: true });
 
 /* ---------------- ฐานข้อมูล ---------------- */
@@ -93,6 +93,7 @@ const SEC_HEADERS = {
   'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=(self)'
 };
 function send(res, status, body, headers = {}) {
+  if (res.req && viaHttps(res.req)) headers = { 'Strict-Transport-Security': 'max-age=15552000', ...headers };
   const isBuf = Buffer.isBuffer(body);
   const data = isBuf ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
   res.writeHead(status, { ...SEC_HEADERS, 'Content-Type': isBuf ? 'application/octet-stream' : typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8', 'Content-Length': data.length, 'Cache-Control': 'no-store', ...headers });
@@ -113,7 +114,15 @@ async function readJson(req) {
   try { return JSON.parse((await readBody(req, 64 * 1024)).toString('utf8') || '{}'); } catch (e) { if (e instanceof HttpError) throw e; fail(400, 'JSON ไม่ถูกต้อง'); }
 }
 const cookies = req => Object.fromEntries((req.headers.cookie || '').split(';').map(c => c.trim().split('=')).filter(p => p[0]).map(([k, ...v]) => [k, decodeURIComponent(v.join('='))]));
-const clientIp = req => req.socket.remoteAddress || '?';
+// IP จริงของผู้ใช้: ถ้าคำขอมาจากเครื่องนี้ (เช่น ผ่าน Cloudflare Tunnel) ใช้เฮดเดอร์ที่ Cloudflare ใส่มา
+// เชื่อเฮดเดอร์เฉพาะเมื่อมาจาก loopback เพราะคนภายนอกปลอมเฮดเดอร์นี้ได้ถ้าต่อตรง
+const isLoopback = a => a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+const clientIp = req => {
+  const a = req.socket.remoteAddress || '?';
+  const cf = req.headers['cf-connecting-ip'];
+  return isLoopback(a) && typeof cf === 'string' && /^[0-9a-fA-F:.]{3,45}$/.test(cf) ? cf : a;
+};
+const viaHttps = req => FORCE_SECURE || (isLoopback(req.socket.remoteAddress) && req.headers['x-forwarded-proto'] === 'https');
 const str = (v, max, field) => {
   if (typeof v !== 'string') fail(400, `${field} ไม่ถูกต้อง`);
   v = v.normalize('NFC').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();
@@ -126,7 +135,7 @@ const SESSION_DAYS = 30;
 function createSession(res, userId, req) {
   const token = crypto.randomBytes(32).toString('base64url');
   q('INSERT INTO sessions (token, user_id, created, expires, ua) VALUES (?,?,?,?,?)').run(sha256(token), userId, now(), now() + SESSION_DAYS * 864e5, String(req.headers['user-agent'] || '').slice(0, 200));
-  res.setHeader('Set-Cookie', `mali_sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${SECURE_COOKIE ? '; Secure' : ''}`);
+  res.setHeader('Set-Cookie', `mali_sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${viaHttps(req) ? '; Secure' : ''}`);
 }
 function currentUser(req) {
   const t = cookies(req).mali_sid;
@@ -151,12 +160,21 @@ const msgOut = m => ({ id: m.id, from: m.from_id, to: m.to_id, text: m.text, med
 const pairOf = (a, b) => [a, b].sort().join('|');
 
 /* ---------------- เรียลไทม์ (SSE) ---------------- */
-const streams = new Map(); // userId → Set<res>
+const streams = new Map(); // userId → Set<res>  (SSE)
+const queues = new Map();  // userId → { seq, events: [{seq,type,data,ts}], waiters: Set<fn> }  (long-poll สำรอง)
+let SEQ = Date.now();
 function emit(userId, type, data) {
-  const set = streams.get(userId); if (!set) return;
-  const line = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const r of set) r.write(line);
+  const set = streams.get(userId);
+  if (set) { const line = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`; for (const r of set) r.write(line); }
+  // เก็บเหตุการณ์ล่าสุดไว้ให้ผู้ใช้ที่ใช้ long-poll (เช่นผ่านพร็อกซีที่บัฟเฟอร์ SSE)
+  const qu = queues.get(userId) || { events: [], waiters: new Set() };
+  qu.events.push({ seq: ++SEQ, type, data, ts: now() });
+  if (qu.events.length > 200) qu.events.splice(0, qu.events.length - 200);
+  queues.set(userId, qu);
+  for (const w of qu.waiters) w();
 }
+// ล้างคิวเก่ากว่า 10 นาที
+setInterval(() => { const t = now(); for (const [k, qu] of queues) { qu.events = qu.events.filter(e => t - e.ts < 600e3); if (!qu.events.length && !qu.waiters.size) queues.delete(k); } }, 60e3).unref();
 setInterval(() => { for (const set of streams.values()) for (const r of set) r.write(': ping\n\n'); }, 25e3).unref();
 
 /* ---------------- ไฟล์อัปโหลด ---------------- */
@@ -217,7 +235,7 @@ route('POST', '/api/auth/login', async (req, res) => {
 route('POST', '/api/auth/logout', (req, res) => {
   const t = cookies(req).mali_sid;
   if (t) q('DELETE FROM sessions WHERE token = ?').run(sha256(t));
-  res.setHeader('Set-Cookie', `mali_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${SECURE_COOKIE ? '; Secure' : ''}`);
+  res.setHeader('Set-Cookie', `mali_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${viaHttps(req) ? '; Secure' : ''}`);
   return { ok: true };
 });
 route('POST', '/api/auth/logout-all', req => { const u = needUser(req); q('DELETE FROM sessions WHERE user_id = ?').run(u.id); return { ok: true }; });
@@ -377,11 +395,28 @@ route('GET', '/api/events', (req, res) => {
   const me = needUser(req);
   const set = streams.get(me.id) || new Set();
   if (set.size >= 10) fail(429, 'เปิดการเชื่อมต่อมากเกินไป');
-  res.writeHead(200, { ...SEC_HEADERS, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-  res.write('retry: 3000\n\n');
+  res.writeHead(200, { ...SEC_HEADERS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.write(`retry: 3000\nevent: hello\ndata: {"seq":${SEQ}}\n\n`);
   set.add(res); streams.set(me.id, set);
-  req.on('close', () => { set.delete(res); if (!set.size) streams.delete(me.id); });
+  res.on('close', () => { set.delete(res); if (!set.size) streams.delete(me.id); });
   return undefined; // ไม่ปิดการตอบกลับ
+});
+
+// long-poll: คืนเหตุการณ์ที่ seq > after ทันที หรือรอสูงสุด 25 วินาที
+route('GET', '/api/poll', (req, res, p, url) => {
+  const me = needUser(req);
+  const after = +url.searchParams.get('after') || 0;
+  const qu = queues.get(me.id) || { events: [], waiters: new Set() };
+  queues.set(me.id, qu);
+  const pending = () => qu.events.filter(e => e.seq > after);
+  if (after === 0 || pending().length) return { seq: after === 0 ? SEQ : qu.events[qu.events.length - 1].seq, events: after === 0 ? [] : pending().map(({ seq, type, data }) => ({ seq, type, data })) };
+  if (qu.waiters.size >= 10) fail(429, 'เปิดการเชื่อมต่อมากเกินไป');
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(tm); qu.waiters.delete(done); const ev = pending(); resolve({ seq: ev.length ? ev[ev.length - 1].seq : after, events: ev.map(({ seq, type, data }) => ({ seq, type, data })) }); };
+    const tm = setTimeout(done, 25e3);
+    qu.waiters.add(done);
+    res.on('close', () => { clearTimeout(tm); qu.waiters.delete(done); });
+  });
 });
 
 /* ---------------- ไฟล์ของแอป ---------------- */
