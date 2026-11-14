@@ -47,6 +47,7 @@
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('in')));
     def.mount?.(el, params);
     if (!def.locked) history.pushState({ page: stack.length }, '');
+    M.renderNav?.();
     return el;
   };
   function popPage(silent) {
@@ -108,7 +109,41 @@
       const ico = k === 'profile' ? M.avatar(M.st.me, 26, on ? 'on' : '') : M.icon(ic, 26);
       const badge = k === 'chat' && unread ? `<span class="badge">${unread > 99 ? '99+' : unread}</span>` : '';
       return `<button class="nav-it${on ? ' on' : ''}" data-act="tab" data-tab="${k}" aria-label="${lbl}" ${on ? 'aria-current="page"' : ''}><span class="nav-ic">${ico}${badge}</span><span class="lbl">${lbl}</span></button>`;
-    }).join('');
+    }).join('') + navDesk(unread);
+  };
+  // เมนูเพิ่มเติมสำหรับจอกว้าง (คอม/แท็บเล็ต): ค้นหา การแจ้งเตือน เพิ่มเติม พับแถบ และปุ่มข้อความลอย
+  const navDesk = unread => {
+    const st = M.st, top = M.topPage()?.dataset.page;
+    const unreadN = st.notifications.filter(n => !n.read).length;
+    const it = (act, ic, lbl, on, badge = '') => `<button class="nav-it nav-desk${on ? ' on' : ''}" data-act="${act}" aria-label="${lbl}"><span class="nav-ic">${M.icon(ic, 26)}${badge}</span><span class="lbl">${lbl}</span></button>`;
+    const recent = st.chats.filter(c => !c.request && c.messages.length).sort((a, b) => (b.messages.at(-1)?.ts || 0) - (a.messages.at(-1)?.ts || 0)).slice(0, 3);
+    const pill = document.getElementById('dmPill');
+    if (pill) {
+      pill.hidden = M.cur === 'chat' || !!top;
+      pill.innerHTML = `${M.icon('send', 22)}<span class="lbl">ข้อความ</span>${unread ? `<span class="badge">${unread > 99 ? '99+' : unread}</span>` : ''}<span class="dm-avs">${recent.map(c => M.avatar(c.type === 'group' ? { name: c.name, hue: c.hue ?? 200 } : M.user(c.members[0]), 28)).join('')}</span>`;
+    }
+    return it('openExplore', 'search', 'ค้นหา', top === 'explore') + it('openNotifs', 'heart', 'การแจ้งเตือน', top === 'notifications', unreadN ? '<i class="dot"></i>' : '')
+      + `<div class="nav-foot nav-desk">${it('openMore', 'menu', 'เพิ่มเติม', false)}<button class="nav-it nav-mini-btn" data-act="toggleNavMini" aria-label="${document.body.classList.contains('nav-mini') ? 'ขยายแถบเมนู' : 'พับแถบเมนู'}"><span class="nav-ic">${M.icon(document.body.classList.contains('nav-mini') ? 'chev' : 'back', 22)}</span><span class="lbl">พับแถบเมนู</span></button></div>`;
+  };
+  try { if (localStorage.getItem('mali.navMini') === '1') document.body.classList.add('nav-mini'); } catch (e) {}
+  M.A.toggleNavMini = () => { const on = document.body.classList.toggle('nav-mini'); try { localStorage.setItem('mali.navMini', on ? '1' : '0'); } catch (e) {} M.renderNav(); };
+  M.A.openMore = () => {
+    const st = M.st, dark = document.documentElement.dataset.theme === 'dark';
+    M.menu([
+      { label: 'การตั้งค่า', icon: 'tune', act: () => M.push('menu') },
+      { label: 'แดชบอร์ดและสถิติ', icon: 'chart', act: () => M.push('dashboard') },
+      { label: 'บันทึกไว้', icon: 'bookmark', act: () => M.push('saved') },
+      { label: dark ? 'สลับเป็นโหมดสว่าง' : 'สลับเป็นโหมดมืด', icon: dark ? 'sun' : 'moon', act: () => { st.settings.theme = dark ? 'light' : 'dark'; M.onChoice['settings.theme']?.(); M.refresh(); } },
+      { label: 'รายงานปัญหา', icon: 'alert', act: M.A.reportProblem },
+      M.cloud?.me ? { label: 'สลับบัญชีออนไลน์', icon: 'userPlus', act: () => { M.push('online'); setTimeout(() => M.A.onAccounts(), 400); } } : null,
+      { label: 'ออกจากระบบ', icon: 'logout', danger: true, act: () => M.A.logout() }
+    ], 'เพิ่มเติม');
+  };
+  M.A.reportProblem = async () => {
+    const t = await M.prompt('รายงานปัญหา', '', 'เล่าว่าเกิดอะไรขึ้น และกดอะไรก่อนเจอปัญหา', { multiline: true, max: 1000, ok: 'ส่งรายงาน', note: 'รายงานจะเก็บไว้ในเครื่องนี้ (ต้นแบบยังไม่มีระบบรับรายงาน) ไม่ส่งข้อความแชตหรือรูปของคุณ' });
+    if (!t || !t.trim()) return;
+    M.st.reports = [...(M.st.reports || []), { text: t.trim(), ts: Date.now(), page: M.topPage()?.dataset.page || M.cur, ua: navigator.userAgent.slice(0, 120) }].slice(-50);
+    M.save(); M.toast('ขอบคุณที่แจ้ง บันทึกรายงานแล้ว');
   };
   M.A.tab = el => M.go(el.dataset.tab);
 
