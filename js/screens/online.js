@@ -19,12 +19,21 @@
     let data = null;
     try { data = await res.json(); } catch {}
     if (!res.ok) {
-      if (res.status === 401 && !opts.quiet401) { C.me = null; C.disconnect(); }
+      if (res.status === 401 && !opts.quiet401) { C.me = null; C.accounts = null; C.disconnect(); }
       throw new ApiError(res.status, data?.error || 'เกิดข้อผิดพลาด');
     }
     return data;
   };
   const fail = e => M.toast(e.message || 'เกิดข้อผิดพลาด');
+  // เปลี่ยนผู้ใช้ที่ใช้งานอยู่ (เข้าสู่ระบบ สลับบัญชี หรือออกจากระบบ)
+  const setMe = (user, unread = 0) => {
+    C.disconnect(); C.me = user; C.unread = unread; C.tab = 'feed'; C.authAdd = false;
+    C.feed = C.chats = C.users = C.suggest = null; C.composer = { text: '', media: [] };
+    while (M.topPage() && /^online(User|Chat|Follows)$/.test(M.topPage().dataset.page)) M.back();
+    if (user) C.connect();
+    redraw();
+  };
+  C.loadAccounts = async () => { try { C.accounts = (await C.api('GET', '/auth/accounts', undefined, { quiet401: true })).accounts; } catch { C.accounts = []; } return C.accounts; };
 
   C.check = async () => {
     if (C.checked) return C.available;
@@ -116,7 +125,7 @@
           <p class="muted">บัญชีออนไลน์ต้องเปิดแอปผ่านเซิร์ฟเวอร์ของมะลิ รันคำสั่งนี้ในโฟลเดอร์แอป แล้วเปิด <b translate="no">http://localhost:8787</b></p>
           <pre class="on-cmd" translate="no">node server/server.js</pre>
           <p class="note">ใช้ Node.js 22.5 ขึ้นไป ไม่ต้องติดตั้งแพ็กเกจเพิ่ม มือถือที่อยู่ Wi-Fi เดียวกันเปิดผ่าน IP ของคอมได้</p></div></div>`;
-      if (!C.me) return authView();
+      if (!C.me || C.authAdd) return authView();
       const tabs = [['feed', 'ฟีด', 'home'], ['chats', 'แชต', 'chat'], ['find', 'ค้นหา', 'search'], ['me', 'ฉัน', 'user']];
       let body = '';
       if (C.tab === 'feed') {
@@ -139,13 +148,15 @@
             <h2 translate="no">${esc(C.me.name)}</h2><p class="muted" translate="no">@${esc(C.me.handle)}</p>${C.me.bio ? `<p translate="no">${esc(C.me.bio)}</p>` : ''}</div>
           <div class="rows">
             <button class="row" data-act="onUser" data-h="${esc(C.me.handle)}"><span class="row-ic">${I('grid', 22)}</span><span class="row-tx"><span>โปรไฟล์และโพสต์ของฉัน</span></span></button>
+            <button class="row" data-act="onFollows" data-h="${esc(C.me.handle)}" data-k="followers"><span class="row-ic">${I('users', 22)}</span><span class="row-tx"><span>ผู้ติดตามและการติดตาม</span></span></button>
+            <button class="row" data-act="onAccounts"><span class="row-ic">${I('userPlus', 22)}</span><span class="row-tx"><span>สลับหรือเพิ่มบัญชี</span><small>เข้าสู่ระบบไว้ได้สูงสุด 5 บัญชีในเครื่องนี้</small></span></button>
             <button class="row" data-act="onEdit" data-k="name"><span class="row-ic">${I('edit', 22)}</span><span class="row-tx"><span>แก้ไขชื่อ</span></span></button>
             <button class="row" data-act="onEdit" data-k="bio"><span class="row-ic">${I('type', 22)}</span><span class="row-tx"><span>แก้ไข Bio</span></span></button>
             <button class="row" data-act="onLogoutAll"><span class="row-ic">${I('device', 22)}</span><span class="row-tx"><span>ออกจากระบบทุกอุปกรณ์</span></span></button>
             <button class="row" data-act="onLogout"><span class="row-ic">${I('logout', 22)}</span><span class="row-tx"><span>ออกจากระบบ</span></span></button></div>
           <p class="note pad">บัญชีนี้อยู่บนเซิร์ฟเวอร์ที่คุณรันเอง แยกจากข้อมูลตัวอย่างในแอป</p>`;
       }
-      return M.bar('ออนไลน์') + `<div class="seg pad tabs on-tabs">${tabs.map(([k, l]) => `<button class="${C.tab === k ? 'on' : ''}" data-act="onTab" data-k="${k}">${l}${k === 'chats' && C.unread ? ` <span class="badge">${C.unread}</span>` : ''}</button>`).join('')}</div>
+      return M.bar(`<button class="on-switch" data-act="onAccounts" aria-label="สลับบัญชี"><span translate="no">@${esc(C.me.handle)}</span>${I('chevDown', 18)}</button>`) + `<div class="seg pad tabs on-tabs">${tabs.map(([k, l]) => `<button class="${C.tab === k ? 'on' : ''}" data-act="onTab" data-k="${k}">${l}${k === 'chats' && C.unread ? ` <span class="badge">${C.unread}</span>` : ''}</button>`).join('')}</div>
         <div class="scroll"><div class="col">${body}</div></div>`;
     },
     mount(el) {
@@ -159,9 +170,9 @@
         const btn = auth.querySelector('.btn.pri'); btn.disabled = true;
         try {
           const d = await C.api('POST', `/auth/${mode}`, body, { quiet401: true });
-          C.me = d.user; C.tab = 'feed'; C.feed = C.chats = C.users = null; C.connect();
+          C.useOther = false; C.accounts = null;
+          setMe(d.user);
           M.toast(mode === 'signup' ? 'สร้างบัญชีแล้ว ยินดีต้อนรับ' : 'เข้าสู่ระบบแล้ว');
-          M.renderPage(el);
         } catch (err) { fail(err); btn.disabled = false; }
       };
       const cmp = el.querySelector('[data-oncompose]');
@@ -189,7 +200,14 @@
 
   function authView() {
     const mode = C.authMode || 'login';
-    return M.bar('ออนไลน์') + `<div class="scroll"><div class="col pad on-auth">
+    if (C.accounts == null) { C.loadAccounts().then(redraw); }
+    const saved = (C.accounts || []).filter(a => !a.active);
+    if (!C.authAdd && !C.useOther && saved.length) return M.bar('ออนไลน์') + `<div class="scroll"><div class="col pad on-auth">
+      <div class="on-intro">${M.logo(48)}<h2>เลือกบัญชี</h2><p class="muted">บัญชีที่เข้าสู่ระบบไว้ในเครื่องนี้</p></div>
+      <div class="on-accs">${saved.map(a => `<button class="on-acc" data-act="onSwitch" data-id="${esc(a.user.id)}">${av(a.user, 52)}<span class="row-tx" translate="no"><span>${esc(a.user.name)}</span><small>@${esc(a.user.handle)}${a.unread ? ` · <b class="acc">ข้อความใหม่ ${a.unread}</b>` : ''}</small></span>${I('chev', 18)}</button>`).join('')}</div>
+      <button class="btn sec wide" data-act="onUseOther">ใช้บัญชีอื่น</button>
+      <button class="btn sec wide" data-act="onAuthMode" data-k="signup">สร้างบัญชีใหม่</button></div></div>`;
+    return M.bar(C.authAdd ? 'เพิ่มบัญชี' : 'ออนไลน์') + `<div class="scroll"><div class="col pad on-auth">
       <div class="on-intro">${M.logo(48)}<h2>${mode === 'login' ? 'เข้าสู่ระบบบัญชีออนไลน์' : 'สร้างบัญชีออนไลน์'}</h2>
         <p class="muted">โพสต์ แชต และติดตามเพื่อนที่ใช้เซิร์ฟเวอร์เดียวกันได้จริง</p></div>
       <div class="seg"><button class="${mode === 'login' ? 'on' : ''}" data-act="onAuthMode" data-k="login">เข้าสู่ระบบ</button><button class="${mode === 'signup' ? 'on' : ''}" data-act="onAuthMode" data-k="signup">สมัครใหม่</button></div>
@@ -201,7 +219,31 @@
         <button class="btn pri wide">${mode === 'login' ? 'เข้าสู่ระบบ' : 'สร้างบัญชี'}</button></form></div></div>`;
   }
 
-  A.onAuthMode = el => { C.authMode = el.dataset.k; redraw(); };
+  A.onAuthMode = el => { C.authMode = el.dataset.k; C.useOther = true; redraw(); };
+  A.onUseOther = () => { C.useOther = true; C.authMode = 'login'; redraw(); };
+
+  /* สลับบัญชี */
+  A.onAccounts = async () => {
+    const list = await C.loadAccounts();
+    const sh = M.sheet(`<div class="rows">${list.map(a => `<button class="row" data-sw="${esc(a.user.id)}">${av(a.user, 44)}<span class="row-tx" translate="no"><span>@${esc(a.user.handle)}</span><small>${esc(a.user.name)}${a.unread ? ` · ข้อความใหม่ ${a.unread}` : ''}</small></span>${a.active ? I('check', 22, 'acc') : a.unread ? `<span class="badge">${a.unread}</span>` : ''}</button>`).join('')}
+        ${list.length < 5 ? `<button class="row" data-add><span class="row-ic">${I('plus', 22)}</span><span class="row-tx"><span>เพิ่มบัญชี</span></span></button>` : ''}</div>
+      <p class="note">ทุกบัญชีใช้โทเค็นแยกกันที่สคริปต์ในหน้าเว็บอ่านไม่ได้ ออกจากระบบบัญชีหนึ่งไม่กระทบบัญชีอื่น</p>`, { title: 'บัญชีในเครื่องนี้' });
+    sh.onclick = async e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.hasAttribute('data-add')) { M.closeSheet(); C.authAdd = true; C.authMode = 'login'; redraw(); return; }
+      if (b.dataset.sw) { M.closeSheet(); switchTo(b.dataset.sw); }
+    };
+  };
+  async function switchTo(id) {
+    if (id === C.me?.id) return;
+    try {
+      const d = await C.api('POST', '/auth/switch', { id }, { quiet401: true });
+      const me = await C.api('GET', '/me', undefined, { quiet401: true });
+      C.accounts = null; setMe(d.user, me.unread || 0);
+      M.toast(`ใช้บัญชี @${d.user.handle} แล้ว`);
+    } catch (e) { fail(e); C.accounts = null; redraw(); }
+  }
+  A.onSwitch = el => switchTo(el.dataset.id);
   A.onTab = el => { C.tab = el.dataset.k; if (C.tab === 'chats') C.chats = null; if (C.tab === 'feed') C.feed = null; redraw(); };
   A.openOnline = () => M.push('online', {});
 
@@ -236,13 +278,18 @@
     try { C.me = (await C.api('PATCH', '/me', { [k]: v })).user; redraw(); } catch (e) { fail(e); }
   };
   A.onLogout = async () => {
-    try { await C.api('POST', '/auth/logout'); } catch {}
-    C.disconnect(); C.me = null; C.feed = C.chats = C.users = null; C.unread = 0; redraw();
+    if (!(await M.confirm(`ออกจากระบบ @${C.me.handle} ใช่ไหม`, 'บัญชีอื่นในเครื่องนี้ยังเข้าสู่ระบบอยู่ตามเดิม', 'ออกจากระบบ', true))) return;
+    let next = null;
+    try { next = (await C.api('POST', '/auth/logout')).next; } catch {}
+    C.accounts = null; C.useOther = false;
+    setMe(next);
+    if (next) M.toast(`สลับไปใช้ @${next.handle}`);
   };
   A.onLogoutAll = async () => {
     if (!(await M.confirm('ออกจากระบบทุกอุปกรณ์ไหม', 'ทุกอุปกรณ์ที่เข้าสู่ระบบบัญชีนี้ รวมถึงเครื่องนี้ จะต้องเข้าสู่ระบบใหม่', 'ออกจากระบบ', true))) return;
-    try { await C.api('POST', '/auth/logout-all'); } catch {}
-    C.disconnect(); C.me = null; redraw();
+    let next = null;
+    try { next = (await C.api('POST', '/auth/logout-all')).next; } catch {}
+    C.accounts = null; setMe(next);
   };
 
   /* โพสต์ */
@@ -288,8 +335,8 @@
       const mine = d.user.id === C.me?.id;
       return M.bar(`<span translate="no">@${esc(d.user.handle)}</span>`) + `<div class="scroll"><div class="col">
         <div class="on-me pad">${av(d.user, 88)}<h2 translate="no">${esc(d.user.name)}</h2>${d.user.bio ? `<p translate="no">${esc(d.user.bio)}</p>` : ''}
-          <div class="on-stats"><span><b>${d.posts.length}</b> โพสต์</span><span><b>${d.followers}</b> ผู้ติดตาม</span><span><b>${d.following}</b> กำลังติดตาม</span></div>
-          ${mine ? '' : `<div class="p2p-row"><button class="btn ${d.isFollowing ? 'sec' : 'pri'}" data-act="onFollow">${d.isFollowing ? 'กำลังติดตาม' : 'ติดตาม'}</button><button class="btn sec" data-act="onChat" data-h="${esc(d.user.handle)}">ส่งข้อความ</button></div>`}</div>
+          <div class="on-stats"><span><b>${d.posts.length}</b> โพสต์</span><button data-act="onFollows" data-h="${esc(d.user.handle)}" data-k="followers"><b>${d.followers}</b> ผู้ติดตาม</button><button data-act="onFollows" data-h="${esc(d.user.handle)}" data-k="following"><b>${d.following}</b> กำลังติดตาม</button></div>
+          ${mine ? '' : `<div class="p2p-row"><button class="btn ${d.isFollowing ? 'sec' : 'pri'}" data-act="onFollow">${d.isFollowing ? 'กำลังติดตาม' : d.followsMe ? 'ติดตามกลับ' : 'ติดตาม'}</button><button class="btn sec" data-act="onChat" data-h="${esc(d.user.handle)}">ส่งข้อความ</button></div>`}</div>
         ${d.posts.length ? d.posts.map(postCard).join('') : '<p class="empty">ยังไม่มีโพสต์</p>'}</div></div>`;
     },
     mount(el, p) {
@@ -300,6 +347,59 @@
     const pg = topOf('onlineUser'), d = pg?._params.data; if (!d) return;
     try { const r = await C.api('POST', `/users/${encodeURIComponent(d.user.handle)}/follow`); d.isFollowing = r.following; d.followers += r.following ? 1 : -1; C.feed = null; M.renderPage(pg); } catch (e) { fail(e); }
   };
+
+  /* ผู้ติดตาม / กำลังติดตาม / แนะนำ */
+  A.onFollows = el => M.push('onlineFollows', { handle: el.dataset.h, tab: el.dataset.k || 'followers', sort: 'new', q: '' });
+  const SORTS = [['new', 'ล่าสุดก่อน'], ['old', 'เก่าสุดก่อน']];
+  const relBtn = r => r.user.id === C.me.id ? ''
+    : r.iFollow ? `<button class="btn sm sec" data-act="onChat" data-h="${esc(r.user.handle)}">ส่งข้อความ</button>`
+    : `<button class="btn sm pri" data-act="onRelFollow" data-h="${esc(r.user.handle)}">${r.followsMe ? 'ติดตามกลับ' : 'ติดตาม'}</button>`;
+  const relRow = (r, extra = '') => `<div class="row on-rel">${av(r.user, 48)}<button class="row-tx" data-act="onUser" data-h="${esc(r.user.handle)}" translate="no"><span>${esc(r.user.handle)}</span><small>${r.mutual ? `<span translate="yes">มีเพื่อนร่วมกัน ${r.mutual} คน</span>` : esc(r.user.name)}</small></button>${relBtn(r)}${extra}</div>`;
+  M.Pages.onlineFollows = {
+    render(p) {
+      const d = p.data, mine = p.handle === C.me?.handle;
+      const head = M.bar(`<span translate="no">${esc(p.handle)}</span>`);
+      if (!d) return head + `<div class="scroll">${loading}</div>`;
+      const tabs = [['followers', `${d.counts.followers} ผู้ติดตาม`], ['following', `${d.counts.following} กำลังติดตาม`]];
+      const rows = d.rows.length ? d.rows.map(r => relRow(r, mine && p.tab === 'followers' ? `<button class="ibtn sm" data-act="onRemoveFollower" data-h="${esc(r.user.handle)}" aria-label="ลบผู้ติดตาม">${I('x', 18)}</button>` : '')).join('')
+        : `<p class="empty">${p.q ? 'ไม่พบบัญชีที่ค้นหา' : p.tab === 'followers' ? 'ยังไม่มีผู้ติดตาม' : 'ยังไม่ได้ติดตามใคร'}</p>`;
+      const sugList = (p.sugg || []).filter(s => !(C.hiddenSug || []).includes(s.user.id) && !d.rows.some(r => r.user.id === s.user.id));
+      const sug = mine && sugList.length ? `<h3 class="sec-t pad">แนะนำสำหรับคุณ</h3><div class="rows">${p.sugg.filter(s => !(C.hiddenSug || []).includes(s.user.id) && !d.rows.some(r => r.user.id === s.user.id)).map(s => relRow({ ...s, iFollow: false }, `<button class="ibtn sm" data-act="onHideSug" data-id="${esc(s.user.id)}" aria-label="ซ่อนคำแนะนำ">${I('x', 18)}</button>`)).join('')}</div>` : '';
+      return head + `<div class="on-ftabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${p.tab === k}" class="${p.tab === k ? 'on' : ''}" data-act="onFollowTab" data-k="${k}">${l}</button>`).join('')}</div>
+        <div class="scroll"><div class="col">
+          <form class="searchf on-find" data-ffind>${I('search', 18)}<input class="field" name="q" value="${esc(p.q)}" placeholder="ค้นหา" autocomplete="off" aria-label="ค้นหาในรายชื่อ"></form>
+          <div class="sec-row pad"><span class="muted small">เรียงลำดับตาม ${SORTS.find(s => s[0] === p.sort)[1]}</span><button class="ibtn sm" data-act="onFollowSort" aria-label="เปลี่ยนการเรียงลำดับ">${I('tune', 18)}</button></div>
+          <div class="rows">${rows}</div>${sug}</div></div>`;
+    },
+    mount(el, p) {
+      if (!p.data) { loadRel(el, p); return; }
+      const f = el.querySelector('[data-ffind]');
+      if (f) { const run = M.debounce(() => { p.q = f.q.value.trim(); loadRel(el, p, true); }, 300); f.q.oninput = run; f.onsubmit = e => { e.preventDefault(); run(); }; }
+    }
+  };
+  async function loadRel(el, p, keepFocus) {
+    try {
+      const qs = `?sort=${p.sort}&q=${encodeURIComponent(p.q || '')}`;
+      const [d, s] = await Promise.all([C.api('GET', `/users/${encodeURIComponent(p.handle)}/${p.tab}${qs}`), p.handle === C.me.handle && !p.sugg ? C.api('GET', '/suggestions') : null]);
+      p.data = d; if (s) p.sugg = s.users;
+      M.renderPage(el);
+      if (keepFocus) { const i = el.querySelector('[data-ffind] input'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+    } catch (e) { fail(e); }
+  }
+  A.onFollowTab = el => { const pg = topOf('onlineFollows'); if (!pg) return; pg._params.tab = el.dataset.k; loadRel(pg, pg._params); };
+  A.onFollowSort = () => { const pg = topOf('onlineFollows'); if (!pg) return; M.menu(SORTS.map(([k, l]) => ({ label: l, icon: pg._params.sort === k ? 'check' : null, act: () => { pg._params.sort = k; loadRel(pg, pg._params); } })), 'เรียงลำดับตาม'); };
+  A.onRelFollow = async el => {
+    try {
+      const r = await C.api('POST', `/users/${encodeURIComponent(el.dataset.h)}/follow`); C.feed = null;
+      const pg = topOf('onlineFollows'); if (pg) { pg._params.sugg = null; loadRel(pg, pg._params); }
+      if (r.following) M.toast(`ติดตาม @${el.dataset.h} แล้ว`);
+    } catch (e) { fail(e); }
+  };
+  A.onRemoveFollower = async el => {
+    if (!(await M.confirm(`ลบ @${el.dataset.h} ออกจากผู้ติดตามไหม`, 'มะลิจะไม่แจ้งเขาว่าถูกลบออก', 'ลบ', true))) return;
+    try { await C.api('POST', `/users/${encodeURIComponent(el.dataset.h)}/remove-follower`); const pg = topOf('onlineFollows'); if (pg) loadRel(pg, pg._params); } catch (e) { fail(e); }
+  };
+  A.onHideSug = el => { C.hiddenSug = [...(C.hiddenSug || []), el.dataset.id]; redraw(); };
 
   /* แชต */
   A.onChat = el => M.push('onlineChat', { handle: el.dataset.h });

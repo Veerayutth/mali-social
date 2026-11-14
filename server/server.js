@@ -132,16 +132,35 @@ const str = (v, max, field) => {
 
 /* ---------------- session ---------------- */
 const SESSION_DAYS = 30;
+/* หลายบัญชีในเครื่องเดียว: แต่ละบัญชีมีคุกกี้ของตัวเอง mali_s_<userId> และ mali_a บอกว่าใช้บัญชีไหนอยู่
+   โทเค็นทุกตัวเป็น HttpOnly สคริปต์ในหน้าเว็บอ่านไม่ได้ เซิร์ฟเวอร์เก็บเฉพาะแฮช */
+const MAX_ACCOUNTS = 5;
+const cookieOpts = (req, maxAge) => `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${viaHttps(req) ? '; Secure' : ''}`;
+const addCookie = (res, c) => { const prev = res.getHeader('Set-Cookie') || []; res.setHeader('Set-Cookie', [...(Array.isArray(prev) ? prev : [prev]), c]); };
+const sessionUser = token => token ? q('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ?').get(sha256(token), now()) || null : null;
+// บัญชีที่เข้าสู่ระบบไว้ในเครื่องนี้ (ตรวจโทเค็นทุกตัว)
+function deviceAccounts(req) {
+  const c = cookies(req), out = [];
+  for (const [k, v] of Object.entries(c)) {
+    if (!k.startsWith('mali_s_')) continue;
+    const u = sessionUser(v);
+    if (u && u.id === k.slice(7)) out.push({ user: u, token: v });
+  }
+  return out;
+}
 function createSession(res, userId, req) {
+  const others = deviceAccounts(req).filter(a => a.user.id !== userId);
+  if (others.length >= MAX_ACCOUNTS) fail(400, `เพิ่มบัญชีในเครื่องนี้ได้สูงสุด ${MAX_ACCOUNTS} บัญชี`);
   const token = crypto.randomBytes(32).toString('base64url');
   q('INSERT INTO sessions (token, user_id, created, expires, ua) VALUES (?,?,?,?,?)').run(sha256(token), userId, now(), now() + SESSION_DAYS * 864e5, String(req.headers['user-agent'] || '').slice(0, 200));
-  res.setHeader('Set-Cookie', `mali_sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${viaHttps(req) ? '; Secure' : ''}`);
+  addCookie(res, `mali_s_${userId}=${token}; ${cookieOpts(req, SESSION_DAYS * 86400)}`);
+  addCookie(res, `mali_a=${userId}; ${cookieOpts(req, SESSION_DAYS * 86400)}`);
+  if (cookies(req).mali_sid) addCookie(res, `mali_sid=; ${cookieOpts(req, 0)}`); // คุกกี้แบบเก่า
 }
 function currentUser(req) {
-  const t = cookies(req).mali_sid;
-  if (!t) return null;
-  const row = q('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ?').get(sha256(t), now());
-  return row || null;
+  const c = cookies(req);
+  if (c.mali_a && /^[\w-]+$/.test(c.mali_a)) { const u = sessionUser(c['mali_s_' + c.mali_a]); if (u && u.id === c.mali_a) return u; }
+  return sessionUser(c.mali_sid);
 }
 const needUser = req => currentUser(req) || fail(401, 'กรุณาเข้าสู่ระบบ');
 
@@ -232,13 +251,30 @@ route('POST', '/api/auth/login', async (req, res) => {
   return { user: pubUser(u) };
 });
 
-route('POST', '/api/auth/logout', (req, res) => {
-  const t = cookies(req).mali_sid;
-  if (t) q('DELETE FROM sessions WHERE token = ?').run(sha256(t));
-  res.setHeader('Set-Cookie', `mali_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${viaHttps(req) ? '; Secure' : ''}`);
-  return { ok: true };
+// ออกจากระบบเฉพาะบัญชีที่ใช้อยู่ แล้วสลับไปบัญชีอื่นในเครื่อง (ถ้ามี)
+function signOut(req, res, userId, everywhere) {
+  const c = cookies(req);
+  if (everywhere) q('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  else { const tk = c['mali_s_' + userId] || c.mali_sid; if (tk) q('DELETE FROM sessions WHERE token = ?').run(sha256(tk)); }
+  addCookie(res, `mali_s_${userId}=; ${cookieOpts(req, 0)}`);
+  if (c.mali_sid) addCookie(res, `mali_sid=; ${cookieOpts(req, 0)}`);
+  const next = deviceAccounts(req).find(a => a.user.id !== userId);
+  addCookie(res, next ? `mali_a=${next.user.id}; ${cookieOpts(req, SESSION_DAYS * 86400)}` : `mali_a=; ${cookieOpts(req, 0)}`);
+  return { ok: true, next: next ? pubUser(next.user) : null };
+}
+route('POST', '/api/auth/logout', (req, res) => { const u = currentUser(req); if (!u) return { ok: true, next: null }; return signOut(req, res, u.id, false); });
+route('POST', '/api/auth/logout-all', (req, res) => { const u = needUser(req); return signOut(req, res, u.id, true); });
+route('GET', '/api/auth/accounts', req => {
+  const cur = currentUser(req);
+  return { accounts: deviceAccounts(req).map(a => ({ user: pubUser(a.user), active: a.user.id === cur?.id,
+    unread: q('SELECT COUNT(*) n FROM messages WHERE to_id = ? AND read_at IS NULL').get(a.user.id).n })) };
 });
-route('POST', '/api/auth/logout-all', req => { const u = needUser(req); q('DELETE FROM sessions WHERE user_id = ?').run(u.id); return { ok: true }; });
+route('POST', '/api/auth/switch', async (req, res) => {
+  const id = String((await readJson(req)).id || '');
+  const a = deviceAccounts(req).find(x => x.user.id === id) || fail(401, 'บัญชีนี้ออกจากระบบไปแล้ว กรุณาเข้าสู่ระบบอีกครั้ง');
+  addCookie(res, `mali_a=${a.user.id}; ${cookieOpts(req, SESSION_DAYS * 86400)}`);
+  return { user: pubUser(a.user) };
+});
 
 route('GET', '/api/me', req => {
   const u = currentUser(req);
@@ -270,6 +306,7 @@ route('GET', '/api/users/:handle', (req, res, p) => {
     followers: q('SELECT COUNT(*) n FROM follows WHERE followee = ?').get(u.id).n,
     following: q('SELECT COUNT(*) n FROM follows WHERE follower = ?').get(u.id).n,
     isFollowing: !!q('SELECT 1 FROM follows WHERE follower = ? AND followee = ?').get(me.id, u.id),
+    followsMe: !!q('SELECT 1 FROM follows WHERE follower = ? AND followee = ?').get(u.id, me.id),
     posts: q('SELECT * FROM posts WHERE user_id = ? ORDER BY created DESC LIMIT 60').all(u.id).map(x => postOut(x, me.id))
   };
 });
@@ -282,6 +319,42 @@ route('POST', '/api/users/:handle/follow', (req, res, p) => {
   if (has) q('DELETE FROM follows WHERE follower = ? AND followee = ?').run(me.id, u.id);
   else { q('INSERT INTO follows VALUES (?,?,?)').run(me.id, u.id, now()); emit(u.id, 'follow', { user: pubUser(me) }); }
   return { following: !has };
+});
+
+/* ผู้ติดตาม / กำลังติดตาม / แนะนำ */
+const mutualCount = (meId, uid) => q('SELECT COUNT(*) n FROM follows a JOIN follows b ON b.follower = a.followee WHERE a.follower = ? AND b.followee = ?').get(meId, uid).n;
+const relRow = (me, u, since) => ({ user: pubUser(u), since,
+  iFollow: !!q('SELECT 1 FROM follows WHERE follower = ? AND followee = ?').get(me.id, u.id),
+  followsMe: !!q('SELECT 1 FROM follows WHERE follower = ? AND followee = ?').get(u.id, me.id),
+  mutual: mutualCount(me.id, u.id) });
+for (const kind of ['followers', 'following']) {
+  route('GET', `/api/users/:handle/${kind}`, (req, res, p, url) => {
+    const me = needUser(req);
+    const u = q('SELECT * FROM users WHERE handle = ?').get(p.handle) || fail(404, 'ไม่พบบัญชีนี้');
+    const order = { new: 'f.created DESC', old: 'f.created ASC' }[url.searchParams.get('sort')] || 'f.created DESC';
+    const s = String(url.searchParams.get('q') || '').trim().slice(0, 30).replace(/[%_\\]/g, m => '\\' + m);
+    const join = kind === 'followers' ? 'f.follower = x.id WHERE f.followee = ?' : 'f.followee = x.id WHERE f.follower = ?';
+    const rows = q(`SELECT x.*, f.created since FROM follows f JOIN users x ON ${join} ${s ? "AND (x.handle LIKE ? ESCAPE '\\' OR x.name LIKE ? ESCAPE '\\')" : ''} ORDER BY ${order} LIMIT 500`)
+      .all(...(s ? [u.id, `%${s}%`, `%${s}%`] : [u.id]));
+    return { user: pubUser(u),
+      counts: { followers: q('SELECT COUNT(*) n FROM follows WHERE followee = ?').get(u.id).n, following: q('SELECT COUNT(*) n FROM follows WHERE follower = ?').get(u.id).n },
+      rows: rows.map(x => relRow(me, x, x.since)) };
+  });
+}
+route('GET', '/api/suggestions', req => {
+  const me = needUser(req);
+  // คนที่ติดตามเราแต่เรายังไม่ติดตามกลับ + เพื่อนของเพื่อน เรียงตามจำนวนเพื่อนร่วมกัน
+  const rows = q(`SELECT x.*, (SELECT COUNT(*) FROM follows a JOIN follows b ON b.follower = a.followee WHERE a.follower = ? AND b.followee = x.id) mutual,
+      EXISTS (SELECT 1 FROM follows WHERE follower = x.id AND followee = ?) fm
+    FROM users x WHERE x.id != ? AND x.id NOT IN (SELECT followee FROM follows WHERE follower = ?)
+    ORDER BY fm DESC, mutual DESC, x.created DESC LIMIT 20`).all(me.id, me.id, me.id, me.id);
+  return { users: rows.map(x => ({ user: pubUser(x), mutual: x.mutual, followsMe: !!x.fm })) };
+});
+route('POST', '/api/users/:handle/remove-follower', (req, res, p) => {
+  const me = needUser(req);
+  const u = q('SELECT * FROM users WHERE handle = ?').get(p.handle) || fail(404, 'ไม่พบบัญชีนี้');
+  q('DELETE FROM follows WHERE follower = ? AND followee = ?').run(u.id, me.id);
+  return { ok: true };
 });
 
 route('GET', '/api/feed', (req, res, p, url) => {

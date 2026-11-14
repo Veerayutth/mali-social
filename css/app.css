@@ -888,3 +888,14 @@ form.p2p-row .btn { flex: 0 0 auto; }
 .on-cm { max-height: 50vh; overflow-y: auto; }
 .on-cm-r { align-items: flex-start; }
 small.strong { color: var(--tx); font-weight: 600; }
+.on-switch { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-weight: 600; color: var(--tx); }
+.on-accs { display: flex; flex-direction: column; gap: 10px; }
+.on-acc { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line2); border-radius: var(--r-lg); background: var(--card); text-align: left; color: var(--tx); }
+.on-acc .row-tx { flex: 1; }
+.on-stats button { color: var(--tx2); font: inherit; }
+.on-ftabs { display: flex; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.on-ftabs button { flex: 1; padding: 12px 8px; font-size: 15px; color: var(--tx2); border-bottom: 2px solid transparent; white-space: nowrap; }
+.on-ftabs button.on { color: var(--tx); font-weight: 600; border-color: var(--tx); }
+.on-rel { gap: 12px; }
+.on-rel .row-tx { flex: 1; min-width: 0; text-align: left; color: var(--tx); display: flex; flex-direction: column; }
+.on-rel .row-tx small { color: var(--tx3); }
