@@ -2,7 +2,7 @@
 /* พจนานุกรมภาษาอังกฤษของ UI (ไทย → อังกฤษ)
    คีย์คือข้อความ UI ที่ดึงจากซอร์ส ภาษาอื่นจะแปลต่อจากค่าภาษาอังกฤษด้วยตัวแปลในเบราว์เซอร์ */
 (function (M) {
-  M.I18N_VERSION = 7;
+  M.I18N_VERSION = 8;
   M.I18N_EN_PATTERNS = [
     ['^(.+?)เร็วเกินไป รออีก (\\d+) วินาที \\(ระบบจำกัดอัตราเพื่อกันสแปม\\)$', '{0}: too fast. Wait {1} seconds (rate limited to prevent spam)'],
     ['^มีเพื่อนร่วมกัน (\\d+) คน$', '{0} mutual friends'],
@@ -674,6 +674,34 @@
     'ล่าสุดก่อน': 'Newest first',
     'กำลังติดตาม': 'Following',
     'ติดตามกลับ': 'Follow back',
-    'เพิ่มบัญชี': 'Add account'
+    'เพิ่มบัญชี': 'Add account',
+    // ความปลอดภัยของบัญชี รายงาน ลบบัญชี
+    'ลบบัญชีถาวร': 'Delete account permanently',
+    'ลบโพสต์ แชต ผู้ติดตาม และไฟล์ทั้งหมดของบัญชีนี้': 'Deletes all posts, chats, followers and files of this account',
+    'ยืนยันด้วยรหัสผ่าน': 'Confirm with your password',
+    'รหัสผ่านของบัญชีนี้': 'This account\'s password',
+    'ลบบัญชีแล้ว': 'Account deleted',
+    'ไปต่อ': 'Continue',
+    'โพสต์ ความคิดเห็น แชต ผู้ติดตาม และไฟล์ทั้งหมดจะถูกลบและกู้คืนไม่ได้': 'Posts, comments, chats, followers and files will be deleted and can\'t be recovered',
+    'ความปลอดภัยของบัญชี': 'Account security',
+    'อุปกรณ์ที่เข้าสู่ระบบ': 'Logged-in devices',
+    'แอปที่เชื่อมต่อ': 'Connected apps',
+    'ใครเข้าถึงข้อมูลของคุณ': 'Who accessed your data',
+    'กิจกรรมล่าสุด': 'Recent activity',
+    'เครื่องนี้': 'This device',
+    'ยังไม่มีแอปที่เชื่อมต่อ': 'No connected apps',
+    'ยังไม่มีเจ้าหน้าที่หรือแอปใดเข้าถึงข้อมูลของคุณ': 'No staff member or app has accessed your data',
+    'ออกจากระบบอุปกรณ์นี้ไหม': 'Log out this device?',
+    'ยกเลิกการเชื่อมต่อแอปนี้ไหม': 'Disconnect this app?',
+    'รายงานบัญชีนี้เพราะ': 'Report this account because',
+    'รายงานโพสต์นี้เพราะ': 'Report this post because',
+    'หลอกลวงหรือฉ้อโกง': 'Scam or fraud',
+    'กลั่นแกล้งหรือคุกคาม': 'Bullying or harassment',
+    'ภาพโป๊หรือเนื้อหาทางเพศ': 'Nudity or sexual content',
+    'ความรุนแรง': 'Violence',
+    'แอบอ้างเป็นคนอื่น': 'Impersonation',
+    'ทำร้ายตัวเอง': 'Self-harm',
+    'อื่นๆ': 'Other',
+    'รายงานบัญชีนี้': 'Report this account'
   };
 })(window.M);
