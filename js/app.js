@@ -49,7 +49,9 @@
 
   // ติดตั้งเป็นแอป (PWA): service worker ทำงานได้เฉพาะเมื่อเปิดผ่าน http(s) ไม่ใช่ file://
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
-    addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e)));
+    // app.js รอโหลดข้อมูลก่อน (async) อาจเลยจังหวะ load ไปแล้ว จึงต้องเช็กสถานะเอกสาร
+    const reg = () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e));
+    if (document.readyState === 'complete') reg(); else addEventListener('load', reg);
   }
   addEventListener('beforeinstallprompt', e => { e.preventDefault(); M.installPrompt = e; });
   addEventListener('appinstalled', () => { M.installPrompt = null; M.toast('ติดตั้งมะลิลงเครื่องแล้ว'); });
