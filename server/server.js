@@ -854,6 +854,7 @@ function serveMedia(req, res, file) {
   }
   const ext = path.extname(file).slice(1).toLowerCase();
   const headers = { ...SEC_HEADERS, 'Content-Type': MIME_BY_EXT[ext] || 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=31536000, immutable', 'Content-Disposition': 'inline', ETag: '"' + path.basename(file) + '"' };
+  if (viaHttps(req)) headers['Strict-Transport-Security'] = 'max-age=15552000';
   if (req.headers['if-none-match'] === headers.ETag) { res.writeHead(304, headers); return res.end(), true; }
   const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
   if (m && (m[1] || m[2])) {
@@ -874,6 +875,7 @@ function serveFile(req, res, file, immutable) {
   const etag = `"${st.size.toString(36)}-${st.mtimeMs.toString(36)}"`;
   const headers = { ...SEC_HEADERS, 'Content-Type': type, ETag: etag, 'Accept-Ranges': 'bytes', 'Cache-Control': immutable ? 'private, max-age=31536000, immutable' : 'no-cache' };
   if (ext === 'html') headers['Content-Security-Policy'] = CSP;
+  if (viaHttps(req)) headers['Strict-Transport-Security'] = 'max-age=15552000';
   if (immutable) headers['Content-Disposition'] = 'inline';
   if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); res.end(); return true; }
   // รองรับ Range สำหรับวิดีโอ
