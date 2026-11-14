@@ -410,6 +410,28 @@ route('PATCH', '/api/me', async req => {
   return { user: pubUser(q('SELECT * FROM users WHERE id = ?').get(u.id)) };
 });
 
+// ลบบัญชีถาวร (สิทธิ์ขอลบข้อมูลตาม PDPA): ต้องยืนยันด้วยรหัสผ่าน ลบโพสต์ ความคิดเห็น ถูกใจ การติดตาม แชต และไฟล์สื่อของบัญชี
+route('POST', '/api/me/delete', async (req, res) => {
+  const me = needUser(req), b = await readJson(req);
+  if (limited('delete:' + me.id, 5, 3600e3)) fail(429, 'ลองบ่อยเกินไป');
+  if (!(await checkPw(typeof b.password === 'string' ? b.password.slice(0, 128) : '', me.pw))) fail(401, 'รหัสผ่านไม่ถูกต้อง');
+  const media = new Set();
+  for (const p of q('SELECT media FROM posts WHERE user_id = ?').all(me.id)) for (const u of JSON.parse(p.media)) media.add(path.basename(u));
+  if (me.avatar) media.add(path.basename(me.avatar));
+  for (const m of q('SELECT media FROM messages WHERE from_id = ? AND media IS NOT NULL').all(me.id)) { try { media.add(path.basename(JSON.parse(kms.open(m.media)))); } catch {} }
+  q('DELETE FROM users WHERE id = ?').run(me.id); // sessions, posts, likes, comments, follows, messages, oauth ถูกลบตาม FOREIGN KEY ON DELETE CASCADE
+  q('DELETE FROM events WHERE user_id = ?').run(me.id);
+  q('DELETE FROM handle_changes WHERE user_id = ?').run(me.id);
+  q("UPDATE reports SET reporter = 'deleted' WHERE reporter = ?").run(me.id);
+  G.audit({ actorType: 'user', actorId: me.id, action: 'delete_account', target: me.id, ip: clientIp(req), detail: { files: media.size } });
+  for (const n of media) {
+    try { if (MEDIA_BLOBS) await (await mediaStore()).delete(n); else fs.unlinkSync(path.join(MEDIA, n)); } catch {}
+  }
+  addCookie(res, `mali_s_${me.id}=; ${cookieOpts(req, 0)}`);
+  const next = deviceAccounts(req).find(a => a.user.id !== me.id);
+  addCookie(res, next ? `mali_a=${next.user.id}; ${cookieOpts(req, SESSION_DAYS * 86400)}` : `mali_a=; ${cookieOpts(req, 0)}`);
+  return { ok: true, next: next ? pubUser(next.user) : null };
+});
 route('GET', '/api/me/handle', req => {
   const me = needUser(req);
   const prev = q('SELECT old, ts FROM handle_changes WHERE user_id = ? AND ts > ? ORDER BY ts DESC LIMIT 1').get(me.id, now() - HANDLE_RESERVE_MS);

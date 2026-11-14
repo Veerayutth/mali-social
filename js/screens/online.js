@@ -159,6 +159,7 @@
             <button class="row" data-act="onEdit" data-k="bio"><span class="row-ic">${I('type', 22)}</span><span class="row-tx"><span>แก้ไข Bio</span></span></button>
             <button class="row" data-act="page" data-page="onlineSecurity" data-params="{}"><span class="row-ic">${I('shieldCheck', 22)}</span><span class="row-tx"><span>ความปลอดภัยของบัญชี</span><small>อุปกรณ์ที่เข้าสู่ระบบ แอปที่เชื่อมต่อ และประวัติการเข้าถึงข้อมูล</small></span></button>
             <button class="row" data-act="onLogoutAll"><span class="row-ic">${I('device', 22)}</span><span class="row-tx"><span>ออกจากระบบทุกอุปกรณ์</span></span></button>
+            <button class="row danger" data-act="onDeleteAccount"><span class="row-ic">${I('trash', 22)}</span><span class="row-tx"><span>ลบบัญชีถาวร</span><small>ลบโพสต์ แชต ผู้ติดตาม และไฟล์ทั้งหมดของบัญชีนี้</small></span></button>
             <button class="row" data-act="onLogout"><span class="row-ic">${I('logout', 22)}</span><span class="row-tx"><span>ออกจากระบบ</span></span></button></div>
           <p class="note pad">บัญชีนี้อยู่บนเซิร์ฟเวอร์ที่คุณรันเอง แยกจากข้อมูลตัวอย่างในแอป</p>`;
       }
@@ -290,6 +291,13 @@
     C.accounts = null; C.useOther = false;
     setMe(next);
     if (next) M.toast(`สลับไปใช้ @${next.handle}`);
+  };
+  A.onDeleteAccount = async () => {
+    if (!(await M.confirm(`ลบบัญชี @${C.me.handle} ถาวรไหม`, 'โพสต์ ความคิดเห็น แชต ผู้ติดตาม และไฟล์ทั้งหมดจะถูกลบและกู้คืนไม่ได้', 'ไปต่อ', true))) return;
+    const pw = await M.prompt('ยืนยันด้วยรหัสผ่าน', '', 'รหัสผ่านของบัญชีนี้', { type: 'password', ok: 'ลบบัญชีถาวร' });
+    if (!pw) return;
+    try { const d = await C.api('POST', '/me/delete', { password: pw }); C.accounts = null; setMe(d.next); M.toast('ลบบัญชีแล้ว'); }
+    catch (e) { fail(e); }
   };
   A.onLogoutAll = async () => {
     if (!(await M.confirm('ออกจากระบบทุกอุปกรณ์ไหม', 'ทุกอุปกรณ์ที่เข้าสู่ระบบบัญชีนี้ รวมถึงเครื่องนี้ จะต้องเข้าสู่ระบบใหม่', 'ออกจากระบบ', true))) return;
